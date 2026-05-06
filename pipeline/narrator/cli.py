@@ -17,12 +17,11 @@ def _emit(event: str, **kwargs) -> None:
     sys.stderr.write(json.dumps({"event": event, **kwargs}) + "\n")
     sys.stderr.flush()
 
-NARRATE_CONCURRENCY = 3
 TTS_CONCURRENCY = 8
 
 from .parse import parse
 from .render import rasterize
-from .script import generate_slide_script, summarize_deck
+from .script import generate_all_scripts, summarize_deck
 from .tts import synthesize
 from .usage import (
     CSV_PATH as USAGE_CSV,
@@ -109,27 +108,20 @@ def render(
     console.print(f"  -> {summary}")
     _emit("phase_done", phase="summarize", duration=times["summarize"], summary=summary)
 
-    console.print(f"[bold cyan]Generating narration[/] (parallel x{NARRATE_CONCURRENCY})")
+    console.print(f"[bold cyan]Generating narration[/] (batched, single call)")
     _emit("phase_start", phase="narrate", total=len(slides))
-    scripts_by_idx: dict[int, str] = {}
     with _timed(times, "narrate"):
-        with ThreadPoolExecutor(max_workers=NARRATE_CONCURRENCY) as ex:
-            futures = {
-                ex.submit(generate_slide_script, slide, png, summary): slide
-                for slide, png in zip(slides, pngs)
-            }
-            for fut in as_completed(futures):
-                slide = futures[fut]
-                scripts_by_idx[slide.index] = fut.result()
-                preview = scripts_by_idx[slide.index][:120]
-                console.print(f"  Slide {slide.index}: {preview[:80]}...")
-                _emit(
-                    "slide_done",
-                    phase="narrate",
-                    index=slide.index,
-                    title=slide.title or "",
-                    preview=preview,
-                )
+        scripts_by_idx = generate_all_scripts(slides, pngs, summary)
+    for slide in slides:
+        preview = scripts_by_idx[slide.index][:120]
+        console.print(f"  Slide {slide.index}: {preview[:80]}...")
+        _emit(
+            "slide_done",
+            phase="narrate",
+            index=slide.index,
+            title=slide.title or "",
+            preview=preview,
+        )
     scripts = [scripts_by_idx[s.index] for s in slides]
     _emit("phase_done", phase="narrate", duration=times["narrate"])
 

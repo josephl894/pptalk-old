@@ -26,6 +26,17 @@ Output rules:
 - Use natural transitions when given prior-slide context.
 - Avoid filler. Every sentence earns its place."""
 
+BATCH_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+
+Batched-deck rules (when given multiple slides at once):
+- Return narrations for ALL slides, in order. Do not skip any.
+- Use natural transitions between slides since you can see the full deck.
+- Output format: prefix each narration with a delimiter line `<<<SLIDE N>>>` on its own line, where N is the slide's 1-based index, then the narration text, then a blank line before the next delimiter.
+- Do not output anything before the first `<<<SLIDE 1>>>` delimiter or after the last narration."""
+
+# Haiku 4.5 hard ceiling on output tokens.
+_HAIKU_MAX_OUTPUT_TOKENS = 8192
+
 
 def summarize_deck(slides: list[Slide]) -> str:
     titles = "\n".join(f"  Slide {s.index}: {s.title or '(no title)'}" for s in slides)
@@ -105,3 +116,105 @@ Visible body text:
         slide_index=slide.index,
     )
     return msg.content[0].text.strip()
+
+
+def generate_all_scripts(
+    slides: list[Slide],
+    png_paths: list[Path],
+    deck_summary: str,
+) -> dict[int, str]:
+    """Generate narrations for every slide in a single batched Haiku call.
+
+    The model receives all slide images interleaved with their text in one user
+    message and returns all narrations delimited by `<<<SLIDE N>>>` markers.
+    Returns `{slide.index: narration}` keyed by 1-based slide index.
+    """
+    if len(slides) != len(png_paths):
+        raise ValueError(f"slides ({len(slides)}) and png_paths ({len(png_paths)}) length mismatch")
+    if not slides:
+        return {}
+
+    content: list[dict] = [{
+        "type": "text",
+        "text": f"Deck summary: {deck_summary}\n\nNarrate all {len(slides)} slides below in order.",
+    }]
+    for slide, png in zip(slides, png_paths):
+        img_b64 = base64.standard_b64encode(png.read_bytes()).decode()
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": img_b64,
+            },
+        })
+        content.append({
+            "type": "text",
+            "text": (
+                f"Slide {slide.index}\n"
+                f"Title: {slide.title or '(none)'}\n"
+                f"Body:\n{slide.body or '(none -- visual content only)'}"
+            ),
+        })
+
+    requested_max = max(2000, 200 * len(slides))
+    if requested_max > _HAIKU_MAX_OUTPUT_TOKENS:
+        raise RuntimeError(
+            f"Batched narration would exceed Haiku 4.5 output ceiling "
+            f"({_HAIKU_MAX_OUTPUT_TOKENS} tokens) for {len(slides)} slides; "
+            "chunked-batch fallback not yet implemented."
+        )
+
+    start = time.monotonic()
+    msg = _client.messages.create(
+        model=MODEL,
+        max_tokens=requested_max,
+        system=[
+            {
+                "type": "text",
+                "text": BATCH_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{"role": "user", "content": content}],
+    )
+    log_anthropic(
+        model=MODEL,
+        call_type="batched_slide_scripts",
+        usage=msg.usage,
+        duration_seconds=time.monotonic() - start,
+    )
+
+    raw = msg.content[0].text
+    return _parse_batched_response(raw, [s.index for s in slides])
+
+
+def _parse_batched_response(raw: str, expected_indices: list[int]) -> dict[int, str]:
+    """Split a batched narration response on `<<<SLIDE N>>>` markers.
+
+    Validates that every expected slide index is present.
+    """
+    import re
+
+    pattern = re.compile(r"<<<SLIDE\s+(\d+)\s*>>>", re.IGNORECASE)
+    matches = list(pattern.finditer(raw))
+    if not matches:
+        raise RuntimeError(
+            "Batched narration response missing `<<<SLIDE N>>>` delimiters. "
+            f"First 200 chars: {raw[:200]!r}"
+        )
+
+    out: dict[int, str] = {}
+    for i, m in enumerate(matches):
+        idx = int(m.group(1))
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+        out[idx] = raw[body_start:body_end].strip()
+
+    missing = [i for i in expected_indices if i not in out]
+    if missing:
+        raise RuntimeError(
+            f"Batched narration response missing slides: {missing}. "
+            f"Got indices: {sorted(out.keys())}"
+        )
+    return out
