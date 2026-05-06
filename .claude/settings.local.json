@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.cdc.gov)",
+      "Read(//opt/homebrew/Cellar/python@3.13/3.13.12_1/Frameworks/Python.framework/Versions/3.13/bin/**)",
+      "Bash(/Users/joseph/Desktop/pptalk/pipeline/.venv/bin/python -v -c \"pass\")",
+      "Bash(npm --version)"
+    ]
+  }
+}

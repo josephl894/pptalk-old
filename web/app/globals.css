@@ -1,0 +1,317 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   PPTalk locked design system — ported from Hi-Fi handoff 2026-05-06
+   Inter + JetBrains Mono · warm-white #FBFAF7 · coral #F97461
+   Sizes 12/13/14/16/20/28 · spacing 4/8/12/16/24/32/48 · radius ≤8
+   ============================================================ */
+
+@layer base {
+  :root {
+    /* ---- Hi-Fi token ramps (canonical) ---- */
+    --paper:        #FBFAF7;
+    --paper-2:      #F5F2EB;
+    --paper-3:      #EFEBE0;
+
+    --ink:          #101010;
+    --ink-1:        #1F1D17;
+    --ink-2:        #4A463C;
+    --ink-3:        #6B665A;
+    --ink-4:        #8E8979;
+    --ink-5:        #B8B2A0;
+
+    --hairline:     rgba(20,18,12,0.08);
+    --hairline-2:   rgba(20,18,12,0.14);
+
+    --accent:       #F97461;
+    --accent-2:     #F45A45;
+    --accent-soft:  #FDE5DF;
+    --accent-tint:  #FCEFEA;
+
+    --ok:           #2F8F5E;
+    --warn:         #C77A2C;
+    --bad:          #B2453A;
+
+    --r-sm: 4px;
+    --r:    6px;
+    --r-md: 8px;
+
+    --shadow-sm: 0 1px 2px rgba(20,18,12,0.06), 0 0 0 1px rgba(20,18,12,0.04);
+    --shadow:    0 4px 12px rgba(20,18,12,0.08), 0 0 0 1px rgba(20,18,12,0.05);
+    --shadow-lg: 0 16px 40px rgba(20,18,12,0.12), 0 0 0 1px rgba(20,18,12,0.05);
+
+    /* ---- shadcn HSL bridge — points at the ramps above so existing
+       primitives (button, dialog, command, …) stay on the locked palette ---- */
+    --background: 36 22% 97%;       /* #FBFAF7 paper */
+    --foreground: 0 0% 6%;          /* #101010 ink */
+
+    --card: 36 22% 97%;
+    --card-foreground: 0 0% 6%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 6%;
+
+    --primary: 9 92% 68%;           /* #F97461 coral */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 39 27% 94%;        /* #F5F2EB paper-2 */
+    --secondary-foreground: 0 0% 6%;
+
+    --muted: 39 27% 94%;
+    --muted-foreground: 38 8% 39%;  /* ~ink-2/ink-3 */
+
+    --accent-hsl: 9 92% 68%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 5 51% 46%;       /* --bad */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 36 8% 88%;
+    --input: 36 8% 88%;
+    --ring: 9 92% 68%;
+
+    --radius: 0.5rem;
+
+    color-scheme: light;
+  }
+
+  .dark {
+    --paper:        #101010;
+    --paper-2:      #18171A;
+    --paper-3:      #201F22;
+
+    --ink:          #FBFAF7;
+    --ink-1:        #ECE7DA;
+    --ink-2:        #B8B2A0;
+    --ink-3:        #8E8979;
+    --ink-4:        #6B665A;
+    --ink-5:        #4A463C;
+
+    --hairline:     rgba(255,250,235,0.08);
+    --hairline-2:   rgba(255,250,235,0.14);
+
+    --background: 0 0% 6%;
+    --foreground: 36 22% 97%;
+
+    --card: 0 0% 9%;
+    --card-foreground: 36 22% 97%;
+
+    --popover: 0 0% 9%;
+    --popover-foreground: 36 22% 97%;
+
+    --primary: 9 92% 68%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 36 22% 97%;
+
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 65%;
+
+    --accent-hsl: 9 92% 68%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 5 51% 46%;
+    --destructive-foreground: 36 22% 97%;
+
+    --border: 0 0% 18%;
+    --input: 0 0% 18%;
+    --ring: 9 92% 68%;
+
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.005em;
+  }
+}
+
+/* ---------- Hi-Fi component vocab (utility classes used by Sidebar,
+              Slide thumb, Status pill, etc. — ported from surfaces/styles.css) ---------- */
+
+@layer components {
+  /* type helpers */
+  .t-12 { font-size: 12px; }
+  .t-13 { font-size: 13px; }
+  .t-14 { font-size: 14px; }
+  .t-16 { font-size: 16px; }
+  .t-20 { font-size: 20px; line-height: 1.3; letter-spacing: -0.01em; }
+  .t-28 { font-size: 28px; line-height: 1.2; letter-spacing: -0.018em; font-weight: 600; }
+
+  /* sidebar */
+  .pp-side {
+    width: 224px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--hairline);
+    padding: 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--paper);
+  }
+  .pp-side-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px 12px;
+  }
+  .pp-side-logo {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    background: var(--ink);
+    color: var(--paper);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 13px;
+    letter-spacing: -0.02em;
+  }
+  .pp-side-item {
+    display: flex; align-items: center; gap: 10px;
+    height: 32px; padding: 0 8px;
+    border-radius: var(--r);
+    font-size: 13px; font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background 120ms ease-out, color 120ms ease-out;
+    position: relative;
+    text-decoration: none;
+  }
+  .pp-side-item:hover { background: var(--paper-2); color: var(--ink-1); }
+  .pp-side-item.is-active {
+    background: var(--paper-2);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .pp-side-item.is-active::before {
+    content: '';
+    position: absolute;
+    left: -12px; top: 50%; transform: translateY(-50%);
+    width: 3px; height: 16px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+  }
+  .pp-side-item .pp-ico {
+    width: 16px; height: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--ink-3);
+    flex-shrink: 0;
+  }
+  .pp-side-item.is-active .pp-ico { color: var(--ink-1); }
+  .pp-side-item .pp-count {
+    margin-left: auto;
+    font-size: 11px; color: var(--ink-4); font-weight: 500;
+  }
+  .pp-side-section {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-4);
+    padding: 16px 8px 6px;
+  }
+
+  /* topbar */
+  .pp-topbar {
+    height: 52px;
+    padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--paper);
+  }
+  .pp-crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-3); }
+  .pp-crumbs .pp-sep { color: var(--ink-5); }
+  .pp-crumbs .pp-here { color: var(--ink); font-weight: 600; }
+
+  /* card */
+  .pp-card {
+    background: var(--paper);
+    border-radius: var(--r-md);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+
+  /* tag / pill */
+  .pp-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    height: 20px;
+    border-radius: 999px;
+    background: var(--paper-2);
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+  }
+  .pp-tag.is-coral   { background: var(--accent-tint); color: var(--accent-2); }
+  .pp-tag.is-ok      { background: rgba(47,143,94,0.10); color: var(--ok); }
+  .pp-tag.is-warn    { background: rgba(199,122,44,0.10); color: var(--warn); }
+  .pp-tag.is-bad     { background: rgba(178,69,58,0.10); color: var(--bad); }
+  .pp-tag.is-outline { background: transparent; border-color: var(--hairline-2); color: var(--ink-3); }
+
+  /* status dot */
+  .pp-dot { width: 6px; height: 6px; border-radius: 99px; flex-shrink: 0; }
+
+  /* thumbnails */
+  .pp-thumb {
+    aspect-ratio: 16 / 9;
+    border-radius: var(--r);
+    background: linear-gradient(180deg, #fff, #F4EFE3);
+    border: 1px solid var(--hairline);
+    position: relative;
+    overflow: hidden;
+  }
+  .pp-thumb-content {
+    position: absolute; inset: 0;
+    padding: 10%;
+    display: flex; flex-direction: column; gap: 6%;
+    font-size: 7px;
+    line-height: 1.3;
+  }
+  .pp-thumb-title {
+    font-size: 11px; font-weight: 600; color: var(--ink-1);
+    letter-spacing: -0.01em;
+  }
+  .pp-thumb-bar { height: 3px; background: var(--ink-5); border-radius: 2px; opacity: 0.55; }
+  .pp-thumb-bar.short { width: 50%; }
+  .pp-thumb-bar.med   { width: 75%; }
+  .pp-thumb-bar.long  { width: 92%; }
+  .pp-thumb-bar.coral { background: var(--accent); opacity: 0.85; width: 40%; height: 4px; }
+
+  /* progress bar */
+  .pp-bar {
+    height: 6px;
+    background: var(--paper-3);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .pp-bar > .pp-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+
+  /* keyboard chip */
+  .pp-kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 5px;
+    border: 1px solid var(--hairline-2);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    color: var(--ink-3);
+    background: var(--paper);
+  }
+}

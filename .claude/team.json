@@ -1,0 +1,11 @@
+{
+  "team_name": "pptalk",
+  "description": "PPTalk-US dev team. Lead orchestrates and merges; eng-1/2/3 implement on branches via PRs; reviewer reviews diffs; qa runs regression smokes. Rehydrate on every fresh session by reading this manifest and spawning each member with a bootstrap pointer (per CLAUDE.md).",
+  "members": [
+    { "name": "eng-1",    "subagent_type": "general-purpose", "briefing_path": ".claude/team/engineer.md" },
+    { "name": "eng-2",    "subagent_type": "general-purpose", "briefing_path": ".claude/team/engineer.md" },
+    { "name": "eng-3",    "subagent_type": "general-purpose", "briefing_path": ".claude/team/engineer.md" },
+    { "name": "reviewer", "subagent_type": "general-purpose", "briefing_path": ".claude/team/reviewer.md" },
+    { "name": "qa",       "subagent_type": "general-purpose", "briefing_path": ".claude/team/qa.md" }
+  ]
+}

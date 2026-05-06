@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+out/
+*.mp4
+*.mp3
+*.wav
+*.pdf
+usage.csv
+runs.csv
