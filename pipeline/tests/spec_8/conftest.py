@@ -34,6 +34,19 @@ import pytest
 from uuid_extensions import uuid7
 
 from narrator.db import close_pool, connection
+from narrator import storage
+
+
+# Smallest possible valid PNG: 1x1 white pixel. Shaped as a valid PNG so
+# any downstream image library (PIL / vision model encoder) can decode it.
+# The pipeline uses these only as base64-encoded bytes for the Claude vision
+# input; for our tests Claude is mocked, so byte-level fidelity beyond
+# "decodable PNG" doesn't matter — but the storage download must succeed.
+_TINY_PNG: bytes = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000d49444154789c63f8ffff3f0005fe02fee5b0c4f70000000049454e"
+    "44ae426082"
+)
 
 
 # Anonymous "system" user used by sample-deck seeding; tests use a freshly
@@ -103,7 +116,8 @@ def make_fixture_project(db_conn):
     (in the order they were inserted, NOT in idx order — so tests can verify
     AC2's non-monotonic mapping).
     """
-    created: list[tuple[object, UUID]] = []  # (conn-for-cleanup-discovery, project_id)
+    created: list[UUID] = []
+    uploaded_paths: list[str] = []
 
     def _make(slide_specs: list[dict], *, name: str = "spec8-fixture") -> dict:
         user_id, browser_id = _new_user(db_conn)
@@ -128,6 +142,7 @@ def make_fixture_project(db_conn):
                 title = spec.get("title", f"Slide {idx}")
                 script = spec.get("script")
                 script_locked = spec.get("script_locked", False)
+                png_path = f"{user_id}/{project_id}/slides/{idx:03d}.png"
                 cur.execute(
                     """
                     INSERT INTO slides (
@@ -139,7 +154,7 @@ def make_fixture_project(db_conn):
                     """,
                     (slide_id, project_id, idx, idx, title,
                      f"Body for slide {idx}",
-                     None, f"{user_id}/{project_id}/slides/{idx:03d}.png",
+                     None, png_path,
                      script, script_locked),
                 )
                 inserted_slides.append({
@@ -148,8 +163,23 @@ def make_fixture_project(db_conn):
                     "title": title,
                     "script": script,
                     "script_locked": script_locked,
+                    "png_path": png_path,
                 })
         db_conn.commit()
+
+        # Upload tiny placeholder PNG bytes so the worker's storage download
+        # succeeds. Claude's vision input is mocked, so byte-level fidelity
+        # doesn't matter — but the storage download path must not 404.
+        for s in inserted_slides:
+            try:
+                storage.upload_bytes(s["png_path"], _TINY_PNG, "image/png")
+                uploaded_paths.append(s["png_path"])
+            except Exception:
+                # A leftover object from a prior failed test may already
+                # exist; the upsert flag in upload_bytes handles that. If
+                # something else fails, surface it so the test fails loudly.
+                raise
+
         created.append(project_id)
         return {
             "user_id": user_id,
@@ -168,6 +198,15 @@ def make_fixture_project(db_conn):
                 _delete_project(cleanup_conn, project_id)
             except Exception:
                 cleanup_conn.rollback()
+
+    # Best-effort storage cleanup. Don't let a 404 here mask a test failure
+    # — the bucket is private and per-user-prefixed, so leftover bytes don't
+    # interfere with other tests.
+    for path in uploaded_paths:
+        try:
+            storage.get_client().storage.from_(storage.BUCKET).remove([path])
+        except Exception:
+            pass
 
 
 @pytest.fixture
