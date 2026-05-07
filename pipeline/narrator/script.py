@@ -1,6 +1,8 @@
 import base64
+import re
 import time
 from pathlib import Path
+from typing import Callable
 
 import anthropic
 
@@ -36,6 +38,10 @@ Batched-deck rules (when given multiple slides at once):
 
 # Haiku 4.5 hard ceiling on output tokens.
 _HAIKU_MAX_OUTPUT_TOKENS = 8192
+
+# Largest slide count safe to fit in a single batched call under the
+# `max(2000, 200 * N)` output budget. Tune here if the budget changes.
+BATCH_CHUNK_SIZE = 40
 
 
 def summarize_deck(slides: list[Slide]) -> str:
@@ -122,22 +128,45 @@ def generate_all_scripts(
     slides: list[Slide],
     png_paths: list[Path],
     deck_summary: str,
+    *,
+    previous_context: str | None = None,
 ) -> dict[int, str]:
-    """Generate narrations for every slide in a single batched Haiku call.
+    """Generate narrations for the given slides in a single batched Haiku call.
 
     The model receives all slide images interleaved with their text in one user
     message and returns all narrations delimited by `<<<SLIDE N>>>` markers.
     Returns `{slide.index: narration}` keyed by 1-based slide index.
+
+    `previous_context`, when set, is the last narration of the previous chunk
+    in a chunked-batch run; it's passed to the model as a transition hint so
+    the first slide in this chunk flows naturally from the prior chunk's end.
+
+    Raises if `len(slides)` would push `max_tokens` above Haiku's 8K output
+    ceiling — callers handling decks larger than `BATCH_CHUNK_SIZE` should use
+    `generate_all_scripts_chunked` instead.
     """
     if len(slides) != len(png_paths):
         raise ValueError(f"slides ({len(slides)}) and png_paths ({len(png_paths)}) length mismatch")
     if not slides:
         return {}
 
-    content: list[dict] = [{
-        "type": "text",
-        "text": f"Deck summary: {deck_summary}\n\nNarrate all {len(slides)} slides below in order.",
-    }]
+    first_idx = slides[0].index
+    last_idx = slides[-1].index
+    intro = f"Deck summary: {deck_summary}\n\n"
+    if previous_context:
+        intro += (
+            "You already narrated earlier slides; the previous narration ended:\n"
+            f'"""{previous_context.strip()}"""\n'
+            "Continue naturally from there.\n\n"
+        )
+    intro += (
+        f"Narrate the {len(slides)} slides below in order. "
+        f"Each slide carries its 1-based deck index in its 'Slide N' header — "
+        f"use that exact number in the `<<<SLIDE N>>>` delimiter you emit "
+        f"(this batch covers indices {first_idx} through {last_idx})."
+    )
+
+    content: list[dict] = [{"type": "text", "text": intro}]
     for slide, png in zip(slides, png_paths):
         img_b64 = base64.standard_b64encode(png.read_bytes()).decode()
         content.append({
@@ -162,7 +191,7 @@ def generate_all_scripts(
         raise RuntimeError(
             f"Batched narration would exceed Haiku 4.5 output ceiling "
             f"({_HAIKU_MAX_OUTPUT_TOKENS} tokens) for {len(slides)} slides; "
-            "chunked-batch fallback not yet implemented."
+            f"use generate_all_scripts_chunked() (chunk_size <= {BATCH_CHUNK_SIZE})."
         )
 
     start = time.monotonic()
@@ -178,6 +207,9 @@ def generate_all_scripts(
         ],
         messages=[{"role": "user", "content": content}],
     )
+    # NOTE: usage_events.csv has no `chunk_index` column today; chunked runs
+    # write one row per chunk all under `call_type="batched_slide_scripts"`.
+    # Add a column if/when we want per-chunk attribution.
     log_anthropic(
         model=MODEL,
         call_type="batched_slide_scripts",
@@ -189,15 +221,61 @@ def generate_all_scripts(
     return _parse_batched_response(raw, [s.index for s in slides])
 
 
+def generate_all_scripts_chunked(
+    slides: list[Slide],
+    png_paths: list[Path],
+    deck_summary: str,
+    *,
+    chunk_size: int = BATCH_CHUNK_SIZE,
+    on_chunk_done: Callable[[list[Slide], dict[int, str]], None] | None = None,
+) -> dict[int, str]:
+    """Batched narration that splits decks larger than `chunk_size` into chunks.
+
+    For decks of size <= `chunk_size`, this is a single call to
+    `generate_all_scripts`. For larger decks, slides are split into sequential
+    chunks of size <= `chunk_size`, each run as one batched call. The previous
+    chunk's last narration is passed forward as a transition hint so continuity
+    survives the chunk boundary.
+
+    `on_chunk_done(chunk_slides, chunk_scripts)` (optional) fires after each
+    chunk completes — useful for streaming progress / persisting partial state.
+    """
+    if len(slides) != len(png_paths):
+        raise ValueError(f"slides ({len(slides)}) and png_paths ({len(png_paths)}) length mismatch")
+    if chunk_size <= 0 or chunk_size > BATCH_CHUNK_SIZE:
+        raise ValueError(f"chunk_size must be in 1..{BATCH_CHUNK_SIZE}, got {chunk_size}")
+    if not slides:
+        return {}
+
+    out: dict[int, str] = {}
+    prev_tail: str | None = None
+    for start in range(0, len(slides), chunk_size):
+        chunk_slides = slides[start:start + chunk_size]
+        chunk_pngs = png_paths[start:start + chunk_size]
+        chunk_scripts = generate_all_scripts(
+            chunk_slides, chunk_pngs, deck_summary,
+            previous_context=prev_tail,
+        )
+        out.update(chunk_scripts)
+        prev_tail = chunk_scripts[chunk_slides[-1].index]
+        if on_chunk_done is not None:
+            try:
+                on_chunk_done(chunk_slides, chunk_scripts)
+            except Exception:
+                pass
+    return out
+
+
+_DELIMITER_RE = re.compile(r"<<<SLIDE\s+(\d+)\s*>>>", re.IGNORECASE)
+
+
 def _parse_batched_response(raw: str, expected_indices: list[int]) -> dict[int, str]:
     """Split a batched narration response on `<<<SLIDE N>>>` markers.
 
-    Validates that every expected slide index is present.
+    Validates that every expected slide index is present and that the response
+    contains no unexpected (extra) slide indices.
     """
-    import re
-
-    pattern = re.compile(r"<<<SLIDE\s+(\d+)\s*>>>", re.IGNORECASE)
-    matches = list(pattern.finditer(raw))
+    matches = list(_DELIMITER_RE.finditer(raw))
     if not matches:
         raise RuntimeError(
             "Batched narration response missing `<<<SLIDE N>>>` delimiters. "
@@ -211,10 +289,12 @@ def _parse_batched_response(raw: str, expected_indices: list[int]) -> dict[int, 
         body_end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
         out[idx] = raw[body_start:body_end].strip()
 
-    missing = [i for i in expected_indices if i not in out]
-    if missing:
+    expected_set = set(expected_indices)
+    missing = sorted(expected_set - set(out))
+    extra = sorted(set(out) - expected_set)
+    if missing or extra:
         raise RuntimeError(
-            f"Batched narration response missing slides: {missing}. "
-            f"Got indices: {sorted(out.keys())}"
+            f"Batched narration response slide-index mismatch. "
+            f"missing={missing} extra={extra} got={sorted(out.keys())}"
         )
     return out

@@ -20,13 +20,11 @@ from .parse import Slide, parse as parse_pptx
 from .parse_pdf import SourceKind, parse as parse_pdf
 from .render import rasterize as rasterize_pptx
 from .render_pdf import rasterize as rasterize_pdf
-from .script import generate_slide_script, summarize_deck
+from .script import generate_all_scripts_chunked, summarize_deck
 from .tts import synthesize
 from .video import render_video
 
 
-# Default parallelism (mirrors cli.py defaults pre-1C).
-NARRATE_CONCURRENCY = 3
 TTS_CONCURRENCY = 8
 
 
@@ -76,16 +74,17 @@ def generate_scripts(
     pngs: list[Path],
     summary: str | None = None,
     *,
-    parallel: int = NARRATE_CONCURRENCY,
     on_slide_done=None,
 ) -> dict[int, str]:
-    """Per-slide script generation (parallel). Returns {slide.index: script}.
+    """Batched script generation. Returns {slide.index: script}.
 
-    If `summary` is None, computes it via `summarize_deck`. Caller can pre-
-    compute the summary once across multiple regen calls if desired.
+    Internally calls `generate_all_scripts_chunked` — single batched call for
+    decks <= BATCH_CHUNK_SIZE, sequential chunks for larger decks. If `summary`
+    is None, computes it once via `summarize_deck`.
 
-    `on_slide_done(slide, script)` (optional) is invoked from the main thread
-    after each slide completes — useful for progress events / DB writes.
+    `on_slide_done(slide, script)` (optional) fires after each chunk returns,
+    once per slide in that chunk in slide-index order — useful for streaming
+    progress events / partial DB writes.
     """
     if summary is None:
         summary = summarize_deck(slides)
@@ -93,22 +92,18 @@ def generate_scripts(
     if len(slides) != len(pngs):
         raise ValueError(f"slides ({len(slides)}) and pngs ({len(pngs)}) length mismatch")
 
-    scripts: dict[int, str] = {}
-    with ThreadPoolExecutor(max_workers=parallel) as ex:
-        futures = {
-            ex.submit(generate_slide_script, slide, png, summary): slide
-            for slide, png in zip(slides, pngs)
-        }
-        for fut in as_completed(futures):
-            slide = futures[fut]
-            text = fut.result()
-            scripts[slide.index] = text
-            if on_slide_done is not None:
-                try:
-                    on_slide_done(slide, text)
-                except Exception:
-                    pass
-    return scripts
+    def _on_chunk_done(chunk_slides: list[Slide], chunk_scripts: dict[int, str]) -> None:
+        if on_slide_done is None:
+            return
+        for s in chunk_slides:
+            try:
+                on_slide_done(s, chunk_scripts[s.index])
+            except Exception:
+                pass
+
+    return generate_all_scripts_chunked(
+        slides, pngs, summary, on_chunk_done=_on_chunk_done,
+    )
 
 
 def synthesize_audio(
