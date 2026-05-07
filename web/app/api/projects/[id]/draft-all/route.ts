@@ -1,14 +1,15 @@
 /**
  * POST /api/projects/[id]/draft-all
  *
- * Enqueue `slide_script_regen` jobs for every slide in this project where the
- * script is empty/null and the slide isn't locked. Each slide gets its own
- * worker job so per-slide progress is observable via realtime, and existing
- * worker code paths are reused unchanged (no new job kind).
+ * Enqueue ONE `project_script_regen` job that batches every empty, unlocked,
+ * non-deleted slide into a single Claude call (collapsing what used to be N
+ * sequential `slide_script_regen` jobs). The worker writes each slide's
+ * script in a single transaction so per-slide realtime still fires for the
+ * overview overlay's progress display.
  *
- * Returns the list of job ids created and the slide ids they target. Caller
- * uses realtime on `slides` to drive per-slide progress, and on `render_jobs`
- * for queued/done state.
+ * Returns `{job_ids, slide_ids}`. `job_ids` is one id (the batched job) when
+ * any slides are in scope, or empty when nothing needs drafting. `slide_ids`
+ * lists the slides the worker will operate on.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -64,33 +65,31 @@ export async function POST(
       return NextResponse.json({ job_ids: [], slide_ids: [] }, { status: 200 });
     }
 
-    const jobs = targetSlides.map((s) => ({
+    const slideIds = targetSlides.map((s) => s.id);
+    const job = {
       id: uuidv7(),
       projectId: project.id,
-      kind: 'slide_script_regen' as const,
-      payload: { slide_id: s.id },
+      kind: 'project_script_regen' as const,
+      payload: { slide_ids: slideIds },
       status: 'queued' as const,
-    }));
+    };
 
-    // Single transaction: insert all jobs + bump updated_at on the targeted
-    // slides so realtime fires for clients showing the overview.
+    // Single transaction: insert the batched job + bump updated_at on the
+    // targeted slides so the overview overlay's realtime subscription fires
+    // for the initial "drafting" state. The per-slide-completion fan-out
+    // happens later when the worker writes scripts (one UPDATE per slide).
     await db.transaction(async (tx) => {
-      await tx.insert(renderJobs).values(jobs);
+      await tx.insert(renderJobs).values(job);
       await tx
         .update(slides)
         .set({ updatedAt: new Date() })
-        .where(
-          inArray(
-            slides.id,
-            targetSlides.map((s) => s.id),
-          ),
-        );
+        .where(inArray(slides.id, slideIds));
     });
 
     return NextResponse.json(
       {
-        job_ids: jobs.map((j) => j.id),
-        slide_ids: targetSlides.map((s) => s.id),
+        job_ids: [job.id],
+        slide_ids: slideIds,
       },
       { status: 202 },
     );
