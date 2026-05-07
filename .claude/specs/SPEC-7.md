@@ -20,9 +20,9 @@ A friend dropping a PDF on `/new` should land in the editor with slides visible 
 
 1. **AC1 — happy path, PDF.** Given a fresh anonymous user (no `pptalk_uid` cookie) and a running worker, When the user uploads a valid multi-page PDF on `/new`, Then within 30 seconds of upload completion the user is at `/p/<project_id>` with one slide thumbnail per PDF page rendered in the filmstrip and the "parsing" UI is no longer visible.
 
-2. **AC2 — DB end state after PDF parse.** Given AC1's flow completed successfully, Then the corresponding `render_jobs` row has `status = 'completed'` and `kind = 'parse_only'`, the `slides` table has exactly N rows for that `project_id` (where N = PDF page count) with `idx` values 0..N-1, and every slide row has a non-null `image_path` whose object resolves via the Supabase Storage signed-URL helper.
+2. **AC2 — DB end state after PDF parse.** Given AC1's flow completed successfully, Then the corresponding `render_jobs` row has `status = 'completed'` and `kind = 'parse_only'`, the `slides` table has exactly N rows for that `project_id` (where N = PDF page count) with `idx` values 0..N-1, and every slide row has a non-null `png_path` whose object resolves via the Supabase Storage signed-URL helper.
 
-3. **AC3 — worker-not-running visibility.** Given the worker is NOT running, When the user uploads a PDF on `/new` (or refreshes into the editor while the parse_only job is unclaimed past a bounded threshold), Then within 60 seconds the parsing UI surfaces a recoverable, non-blocking message indicating the render worker is not available (exact copy at engineer's discretion, but it must (a) name the worker, (b) suggest the user start it, and (c) not block other UI from rendering). The job row itself is left in `pending` (not failed) so a started worker still picks it up.
+3. **AC3 — worker-not-running visibility.** Given the worker is NOT running, When the user uploads a PDF on `/new` (or refreshes into the editor while the parse_only job is unclaimed past a bounded threshold), Then within 60 seconds the parsing UI surfaces a recoverable, non-blocking message indicating the render worker is not available (exact copy at engineer's discretion, but it must (a) name the worker, (b) suggest the user start it, and (c) not block other UI from rendering). The job row itself remains re-claimable — `render_jobs.status` MUST be the schema's queued/pending state (i.e., not `failed` and not `completed`) so a started worker still picks it up.
 
 ## Out of scope
 - PPTX upload path. Engineer may fix shared root causes if any surface, but the test surface is PDF-only.
@@ -45,9 +45,13 @@ A friend dropping a PDF on `/new` should land in the editor with slides visible 
 
 ## Test surface
 - AC1 → integration (Node, headless): with worker running locally, POST a PDF blob to `/api/projects`; poll `GET /api/projects/[id]` (or query DB directly) until `slides.length === pdf.pageCount`; assert ≤30s. Plus a manual smoke pass at `/new` with a samples/ PDF.
-- AC2 → integration (Python or Node): after AC1's flow, query `render_jobs` for the project and assert `status='completed'`, `kind='parse_only'`; query `slides` and assert row count + monotonic idx + `image_path` non-null; HEAD-fetch each `image_path` via signed URL and assert 200.
-- AC3 → integration (Node): with worker stopped (or simulated by not consuming `pending` parse_only jobs), POST a PDF to `/api/projects`; load `/p/[id]`; assert that within 60s the page surfaces a "worker not available" affordance (DOM probe or API status field) AND `render_jobs.status` is still `pending` (not `failed`).
+- AC2 → integration (Python or Node): after AC1's flow, query `render_jobs` for the project and assert `status='completed'`, `kind='parse_only'`; query `slides` and assert row count + monotonic idx + `png_path` non-null; HEAD-fetch each `png_path` via signed URL and assert 200.
+- AC3 → integration (Node): with worker stopped (or simulated by not consuming queued parse_only jobs), POST a PDF to `/api/projects`; load `/p/[id]`; assert that within 60s the page surfaces a "worker not available" affordance (probe via API JSON field OR DOM HTML — either is acceptable) AND `render_jobs.status` is still in the queued/pending state (NOT `failed`, NOT `completed`).
 
 ## Open questions (resolved before dispatch)
 - Q: Worker state during repro? — A: User unsure. Engineer must verify worker is running as the first triage step. If "worker not running" is the entire root cause, AC1 is satisfied trivially with the worker started, and AC3 becomes the load-bearing requirement of this ticket.
 - Q: File format scope? — A: PDF only.
+
+## Spec amendments
+- 2026-05-07 — qa flagged two drafting errors during test authoring: (a) AC2's "image_path" was wrong; the schema column is `png_path`. Fixed in AC2 + AC2 test surface. (b) AC3 said "pending" but the schema default is `queued`. Reworded AC3 + AC3 test surface to reference the schema's queued/pending state (not-failed, not-completed) so it's terminology-agnostic.
+- 2026-05-07 — clarified AC3 visibility probe accepts either an API JSON field OR DOM HTML signal; either passing is sufficient.
