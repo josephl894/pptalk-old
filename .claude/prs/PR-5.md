@@ -1,7 +1,7 @@
 # PR-5: Standardize per-agent worktrees to prevent branch-swap races
 Author: eng-3
 Branch: chore/worktree-conventions
-Status: open
+Status: open (revised after CHANGES_REQUESTED)
 
 ## Why
 PR-1 and PR-2 qa smokes (2026-05-06) hit two distinct races caused by every agent sharing the primary tree at `/Users/joseph/Desktop/pptalk`: a peer's `git checkout` swapped files under qa's running render, and the shared `:3000` dev server changed branches mid-test. This PR codifies per-task git worktrees + an isolated qa dev server on `:3001`, so each agent's reads, imports, and processes are pinned to a stable file tree for the duration of the work.
@@ -119,3 +119,38 @@ Once that's addressed, the rest are non-blocking polish items but worth folding 
 - CLAUDE.md "Implement" step doesn't mention the `worktree-add.sh` helper.
 - Helper's env-symlink lines should fail loudly on missing source rather than `|| true`-swallowing.
 - (Suggestion only, not iterate-required) extend the helper with `-q <pr-id>` / `-r <pr-id>` flags to cover qa/reviewer paths — or document why deliberately not.
+
+## Author response
+
+### eng-3 @ 2026-05-07T01:25:00Z
+
+All four points addressed in this iteration. Empirical aside — while idle for review, my worktree itself got swapped to `main` by some peer process (`git status` reported `On branch main` from inside `/tmp/pptalk-worktree-conventions`, files gone). Restored with `git checkout chore/worktree-conventions`, which is itself another data point for why the convention matters. Not a regression in the PR; just noting it.
+
+**1. Merge clause (blocker).** Dropped the `/tmp/pptalk-merge` worktree pattern entirely. CLAUDE.md "Merge" step now reads:
+```
+cd /Users/joseph/Desktop/pptalk
+git merge --no-ff --no-edit <branch>
+git branch -d <branch>
+```
+The primary tree is already on `main` per the branch-protection rule, so the merge is race-free without an extra worktree — every other agent is in `/tmp/pptalk-*`. Phrase "never the primary tree" deleted. The branch-protection bullet now also captures the rationale + the empirical reason a separate merge worktree fails (git refuses to check out the same branch in two worktrees).
+
+**2. `<id>` vs `<pr-id>` drift.** Aligned on `<pr-id>` everywhere in CLAUDE.md (engineer's own worktree stays as `<slug>`; reviewer/qa worktrees use `<pr-id>`). Briefings already used `<pr-id>` so no change there.
+
+**3. Helper visibility in CLAUDE.md.** "Implement" step now leads with the helper as the recommended path (`.claude/ci/worktree-add.sh <feat|fix|chore>/<slug>`) and shows the manual `git worktree add` form as the equivalent fallback. engineer.md step 2 already had this shape; CLAUDE.md now matches.
+
+**4. Helper env-symlink foot-gun.** Replaced `ln -s ... 2>/dev/null || true` with a `link_env()` helper that:
+- Fails loudly with a clear error + non-zero exit if the source file is missing in the primary tree (the exact case `|| true` was swallowing).
+- No-ops when the destination already exists or is already a symlink (for re-run / racy creation cases).
+- Otherwise creates the symlink without redirecting stderr, so any genuine `ln` error surfaces.
+
+Smoke-tested: missing-source path exits 1 with "source env file missing: ..."; idempotent re-run on an existing symlink returns 0 cleanly; happy path symlinks both env files. All previous helper smokes (bad-prefix, missing-arg, pre-existing-target) still pass.
+
+**(Suggestion, deferred.)** The `-q <pr-id>` / `-r <pr-id>` flags for qa/reviewer paths are a clean follow-up but not required for this iteration. Filing as a follow-up rather than expanding scope here.
+
+### CI (revised)
+```
+→ TS type-check (web)
+→ Python import smoke (pipeline)
+imports OK
+✓ CI green
+```
