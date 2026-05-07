@@ -1,4 +1,4 @@
-# PR-1: Fix voice card play button + persist project voice across reload
+# PR-2: Fix voice card play button + persist project voice across reload
 Author: eng-2
 Branch: fix/voice-overlay
 Status: open
