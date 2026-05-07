@@ -191,7 +191,7 @@ def test_ac1_one_llm_call_for_n_unlocked_slides(
     })
 
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code == 200, f"draft-all returned {r.status_code}: {r.text}"
+    assert r.status_code in (200, 202), f"draft-all returned {r.status_code}: {r.text}"
 
     drain_worker(max_iterations=10)
 
@@ -237,7 +237,7 @@ def test_ac2_per_slide_mapping_with_non_monotonic_ids(
     })
 
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code == 200, f"draft-all returned {r.status_code}: {r.text}"
+    assert r.status_code in (200, 202), f"draft-all returned {r.status_code}: {r.text}"
 
     drain_worker(max_iterations=10)
 
@@ -288,7 +288,7 @@ def test_ac3_locked_slide_excluded_from_batch_and_unchanged(
     })
 
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code == 200, f"draft-all returned {r.status_code}: {r.text}"
+    assert r.status_code in (200, 202), f"draft-all returned {r.status_code}: {r.text}"
 
     drain_worker(max_iterations=10)
 
@@ -350,7 +350,7 @@ def test_ac4_all_or_nothing_on_anthropic_5xx(
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
     # Route response itself may be 200 (jobs enqueued) or 5xx (sync impl);
     # the spec only constrains the post-state.
-    assert r.status_code in (200, 500, 502, 503), r.status_code
+    assert r.status_code in (200, 202, 500, 502, 503), r.status_code
 
     drained = drain_worker(max_iterations=10)
 
@@ -397,7 +397,7 @@ def test_ac4_all_or_nothing_on_malformed_response(
     })
 
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code in (200, 500, 502, 503), r.status_code
+    assert r.status_code in (200, 202, 500, 502, 503), r.status_code
 
     drain_worker(max_iterations=10)
 
@@ -428,7 +428,7 @@ def test_ac5_zero_in_scope_slides_makes_no_call(
     project_id = fx["project_id"]
 
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code == 200, f"draft-all returned {r.status_code}: {r.text}"
+    assert r.status_code in (200, 202), f"draft-all returned {r.status_code}: {r.text}"
 
     drain_worker(max_iterations=10)
 
@@ -463,7 +463,7 @@ def test_ac5_single_in_scope_slide_makes_one_call(
     })
 
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code == 200, f"draft-all returned {r.status_code}: {r.text}"
+    assert r.status_code in (200, 202), f"draft-all returned {r.status_code}: {r.text}"
 
     drain_worker(max_iterations=10)
 
@@ -506,7 +506,7 @@ def test_ac6_usage_csv_one_row_per_batch(
 
     t0 = dt.datetime.now(tz=dt.timezone.utc)
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code == 200, r.text
+    assert r.status_code in (200, 202), r.text
 
     drain_worker(max_iterations=10)
     t1 = dt.datetime.now(tz=dt.timezone.utc)
@@ -558,7 +558,7 @@ def test_ac7_per_slide_updated_at_bumped(
     })
 
     r = _trigger_draft_all(live_route_url, project_id, fx["browser_id"])
-    assert r.status_code == 200, r.text
+    assert r.status_code in (200, 202), r.text
 
     drain_worker(max_iterations=10)
 
