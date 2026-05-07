@@ -120,6 +120,38 @@ This is a spec ambiguity, not an impl bug per se — both readings are coherent.
 
 **For team-lead:** route back to engineer (or amend spec) for the summarize_deck question. AC2, AC4 (both cases), AC5-zero, AC7 are clean PASSes — those won't need rework regardless of the AC1 resolution.
 
+### qa @ 2026-05-07T05:25:00Z (run 2 — post spec amendment 46b1457)
+
+**Gate worktree:** `/tmp/pptalk-qa-gate-8` (reused from run 1; merged `main` for SPEC-8 amendment 46b1457, then re-merged `test/bulk-regen-batch` HEAD `0cc5f53` for the AC1/AC3/AC5-single/AC6 assertion updates).
+
+**Test branch update (commit 0cc5f53 on `test/bulk-regen-batch`):** narration-call vs. setup-call distinction now lives in two helpers — `_is_narration_call(call)` (inspects `messages.create` kwargs for list-shaped `system` + image content blocks) and `_narration_call_count(mock)` (counts only narration calls). AC1 / AC3 / AC5-single switched from `mock.call_count == 1` to `_narration_call_count(mock) == 1`. AC3's locked-slide payload check now extracts the narration call's args (not the deck_summary call's args, which sees full-deck titles and would falsely flag the locked slide). AC6 filters `usage.csv` rows on `call_type == "batched_slide_scripts"`. AC5-zero unchanged (still `call_count == 0` total — with no in-scope slides, neither summary nor narration fires).
+
+**Test results**
+
+- AC1 (One narration call for the batch — N ≥ 2 unlocked slides → exactly 1 `batched_slide_scripts` call) — **PASS**: 5 unlocked slides → `_narration_call_count == 1`. The deck_summary setup call is permitted by the amended AC1 and not counted.
+- AC2 (per-slide narration mapping; non-monotonic ids) — **PASS**: unchanged from run 1.
+- AC3 (locked slides excluded from the batch) — **PASS**: with the call-count assertion now filtering to narration calls, all three sub-checks land cleanly. (a) `_narration_call_count == 1`. (b) the narration call's payload does not contain the locked slide's body text or its `Slide 2` header. (c) locked slide's pre-call script byte-identical post-call; unlocked slides updated. **Confirmed independent of run 1's deck_summary side-effect** — the locked-slide exclusion logic is correct in the impl; run 1's failure was purely the call-count assertion catching deck_summary, exactly as flagged.
+- AC4 case (a) (Anthropic raises 5xx) — **PASS**: unchanged from run 1.
+- AC4 case (b) (response missing one requested idx) — **PASS**: unchanged from run 1.
+- AC5 case 1 (zero in-scope → 0 Claude calls) — **PASS**: unchanged from run 1.
+- AC5 case 2 (single in-scope → exactly 1 narration call) — **PASS**: with one unlocked slide between two locked siblings, `_narration_call_count == 1`. Locked siblings preserved; the only-unlocked slide receives its expected narration.
+- AC6 (usage.csv telemetry — exactly 1 narration-call row per batch) — **PASS**: 5-slide bulk regen yields exactly one `call_type=batched_slide_scripts` row in window. The `call_type=deck_summary` row is now permitted alongside per the amended AC6.
+- AC7 (per-slide `updated_at` bumped) — **PASS**: unchanged from run 1.
+
+**CI baseline:** `.claude/ci/run.sh` → green
+```
+→ TS type-check (web)
+→ Python import smoke (pipeline)
+imports OK
+✓ CI green
+```
+
+**Verdict: PASS**
+
+All 9 tests across AC1..AC7 pass. The impl on `feat/bulk-regen-batch` (HEAD `34e3c35`, unchanged since run 1) satisfies the amended SPEC-8.
+
+**For team-lead:** ready for reviewer.
+
 ## Reviews
 <!-- filled by reviewer -->
 
