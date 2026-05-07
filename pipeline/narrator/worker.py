@@ -5,10 +5,11 @@ Storage, calls into `pipeline_runner`, uploads artifacts back, and updates the
 DB. Owns all I/O orchestration; `pipeline_runner` is pure.
 
 Job kinds (see PLAN-DEMO Phase 1C spec for payload shape and behavior):
-    parse_only          - parse + rasterize + upload PNGs + populate slides
-    full_render         - end-to-end (re-parses if slides empty), produces MP4
-    slide_script_regen  - regenerate one slide's script
-    slide_tts           - synthesize one slide's audio
+    parse_only            - parse + rasterize + upload PNGs + populate slides
+    full_render           - end-to-end (re-parses if slides empty), produces MP4
+    slide_script_regen    - regenerate one slide's script
+    project_script_regen  - bulk regen N slides via ONE batched Claude call
+    slide_tts             - synthesize one slide's audio
 """
 
 from __future__ import annotations
@@ -221,6 +222,8 @@ class Worker:
             self._do_full_render(job)
         elif kind == "slide_script_regen":
             self._do_slide_script_regen(job)
+        elif kind == "project_script_regen":
+            self._do_project_script_regen(job)
         elif kind == "slide_tts":
             self._do_slide_tts(job)
         else:
@@ -568,6 +571,154 @@ class Worker:
                     queries.set_slide_script(conn, slide_id, script, locked=False)
 
             _log(f"slide_script_regen done slide={slide_id}")
+
+    def _do_project_script_regen(self, job: dict) -> None:
+        """Bulk regenerate scripts for many slides via ONE batched Claude call.
+
+        Payload: `{slide_ids: [<uuid>, ...]}` — the route picks the in-scope set
+        (script_locked=false AND empty script AND deleted_at IS NULL); the worker
+        re-filters defensively against `script_locked=false AND deleted_at IS NULL`
+        in case a slide was locked or deleted between enqueue and run.
+
+        Contract:
+        - Exactly ONE Anthropic call for batches of <= BATCH_CHUNK_SIZE slides
+          (chunked sequentially for larger projects; single call is the spec
+          baseline at AC1).
+        - All-or-nothing: scripts are collected in memory first; if the call
+          fails or the response can't be mapped to every requested slide_id,
+          NO slide's script is updated in DB.
+        - Each in-scope slide's `updated_at` is bumped (one UPDATE per slide
+          via `set_slide_script`) so per-slide realtime fires for the overview
+          overlay's progress display.
+        """
+        payload = job.get("payload") or {}
+        raw_ids = payload.get("slide_ids") or []
+        if not isinstance(raw_ids, list):
+            raise ValueError("project_script_regen payload.slide_ids must be a list")
+        project_id = job["project_id"]
+
+        run_id = str(uuid7())
+
+        with connection() as conn:
+            project = _get_project(conn, project_id)
+            if project is None:
+                raise RuntimeError(f"project {project_id} not found")
+            deck_slides = _get_slides(conn, project_id)
+
+        # Build full deck SlideDC list once for the deck summary (used to give
+        # the model context across the project, even when only some slides are
+        # in scope for regeneration).
+        from .parse import Slide as SlideDC
+
+        # Index by string id for the requested set lookup.
+        deck_by_id = {str(s["id"]): s for s in deck_slides}
+
+        # Resolve and filter the requested set: keep only slides that exist in
+        # this project, are not locked, and not deleted (the deck_slides query
+        # already filters out other projects implicitly; soft-delete column
+        # is not in the SELECT but defaults to NULL on undeleted rows — keep
+        # the existing _get_slides surface and re-check via DB on write).
+        requested = [str(sid) for sid in raw_ids if str(sid) in deck_by_id]
+        in_scope_rows = [
+            deck_by_id[sid] for sid in requested
+            if not deck_by_id[sid].get("script_locked")
+        ]
+
+        if not in_scope_rows:
+            # Nothing to do — empty set is success, no Claude call.
+            _log(f"project_script_regen no-op (0 in-scope slides) project={project_id}")
+            return
+
+        # Order by current slide.idx so the model sees a coherent progression.
+        in_scope_rows.sort(key=lambda r: r["idx"])
+
+        # Build SlideDC objects for both the full-deck summary input and the
+        # in-scope batch input. Index used by SlideDC must match the index the
+        # delimiter parser will key by — we use the slide's `idx` (its current
+        # 1-based-ish ordinal in the deck after any reorder; same convention
+        # `full_render` uses today).
+        full_deck_objs = [
+            SlideDC(
+                index=s["idx"],
+                title=s["title"] or "",
+                body=s["body_text"] or "",
+                speaker_notes=s["speaker_notes"] or "",
+            )
+            for s in deck_slides
+        ]
+
+        with tempfile.TemporaryDirectory(prefix="pptalk_bulk_regen_") as tmpdir:
+            tmp = Path(tmpdir)
+
+            # Download PNGs for in-scope slides only.
+            in_scope_objs: list[SlideDC] = []
+            in_scope_pngs: list[Path] = []
+            for row in in_scope_rows:
+                png_path = row.get("png_path")
+                if not png_path:
+                    raise RuntimeError(
+                        f"slide {row['id']} has no png_path; cannot regenerate"
+                    )
+                local_png = tmp / f"slide_{row['idx']:03d}.png"
+                storage.download_to(png_path, local_png)
+                in_scope_objs.append(
+                    SlideDC(
+                        index=row["idx"],
+                        title=row["title"] or "",
+                        body=row["body_text"] or "",
+                        speaker_notes=row["speaker_notes"] or "",
+                    )
+                )
+                in_scope_pngs.append(local_png)
+
+            usage.set_db_context(
+                project_id=str(project_id),
+                run_id=run_id,
+                db_enabled=True,
+            )
+            try:
+                from .script import summarize_deck
+                # Summary uses the full deck for context; only the in-scope
+                # slides are sent as images for narration.
+                summary = summarize_deck(full_deck_objs)
+
+                # IMPORTANT: do NOT pass on_slide_done here — we want strict
+                # all-or-nothing (AC4). Collect all scripts in memory; only
+                # apply to DB after the batched call(s) have all returned
+                # successfully and every requested index is mapped.
+                scripts_by_idx = pipeline_runner.generate_scripts(
+                    in_scope_objs, in_scope_pngs, summary,
+                    log=_log,
+                )
+            finally:
+                usage.set_db_context(db_enabled=False)
+
+        # Validate: every in-scope slide must have a script in the response.
+        # `generate_all_scripts` already raises on missing/extra indices, but
+        # double-check at the worker boundary so a malformed result never
+        # results in a partial DB write.
+        missing = [r["idx"] for r in in_scope_rows if r["idx"] not in scripts_by_idx]
+        if missing:
+            raise RuntimeError(
+                f"batched regen response missing slide indices: {missing}"
+            )
+
+        # All-or-nothing apply: single transaction, one UPDATE per slide so
+        # each row's `updated_at` is bumped (realtime per-slide fan-out).
+        with connection() as conn:
+            with conn.transaction():
+                for row in in_scope_rows:
+                    queries.set_slide_script(
+                        conn,
+                        row["id"],
+                        scripts_by_idx[row["idx"]],
+                        locked=False,
+                    )
+
+        _log(
+            f"project_script_regen done project={project_id} "
+            f"slides_updated={len(in_scope_rows)}"
+        )
 
     def _do_slide_tts(self, job: dict) -> None:
         payload = job.get("payload") or {}

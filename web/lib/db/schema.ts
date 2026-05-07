@@ -102,7 +102,7 @@ export const renderJobs = pgTable(
     projectId: uuid('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
-    kind: text('kind').notNull(), // 'parse_only' | 'full_render' | 'slide_tts' | 'slide_script_regen'
+    kind: text('kind').notNull(), // 'parse_only' | 'full_render' | 'slide_tts' | 'slide_script_regen' | 'project_script_regen'
     payload: jsonb('payload')
       .$type<Record<string, unknown>>()
       .notNull()
