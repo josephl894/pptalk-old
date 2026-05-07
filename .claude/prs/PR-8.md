@@ -153,7 +153,79 @@ All 9 tests across AC1..AC7 pass. The impl on `feat/bulk-regen-batch` (HEAD `34e
 **For team-lead:** ready for reviewer.
 
 ## Reviews
-<!-- filled by reviewer -->
+
+### reviewer @ 2026-05-07T05:35:00Z
+
+**Method:** spec-only adversarial review against `SPEC-8.md` (post 2026-05-07 AC1/AC6 amendment, commit 46b1457) + `hats/engineering.md` Hard rules / patterns / pitfalls + `SCOPE-DEMO.md` in/out boundary + `DOCS-STYLE.md` for the PR-file prose. No code read, no `git diff`, no source files opened, no worktree.
+
+**Spec well-formed**
+
+- AC1..AC7 observable and unambiguous after the post-gate amendment (narration-call count, not total `messages.create` count). The amendment surgically restricts the AC1/AC6 wording to narration calls and explicitly permits O(1) setup calls (e.g. `deck_summary`); the user's symptom — "speaker notes are being populated per slide" — remains the binding intent.
+- Out-of-scope tight: TTS, video, single-slide regen, `script_locked` semantics, label/voice changes, cross-deck batching, streaming partial results, and the new-job-kind-vs-in-route implementation choice all explicitly excluded.
+- Invariants in scope cover: Haiku 4.5 + prompt caching on system prompt, cache floor (4096 tokens), schema convention (`updated_at` bump for AC7), draft-all in-scope rule (`script_locked=false AND deleted_at IS NULL`), 403/404 boundary (pitfall #5), cost telemetry shape.
+- Open questions: none — spec ready to dispatch and the post-gate ambiguity has been resolved in the amendment.
+
+**Spec coverage probes**
+
+- AC1 (one narration call; O(1) setup permitted) — defended; PR cites `script.py:198-209` issuing exactly one `_client.messages.create` per chunk for ≤40-slide decks (the spec test surface). Engineer self-flags the chunked-deck shape (>40 slides → N_chunks narration calls) in `## Decisions and risks` line 52 and frames it as the existing batched primitive's behavior, not a regression introduced here. Read-against-amended-AC1: chunk-shape is one batched-narration call per chunk, which matches the "shape" intent. Qa run 2 confirms `_narration_call_count == 1` for N=5.
+- AC2 (per-slide narration mapping; non-monotonic ids) — defended; `<<<SLIDE N>>>` delimiter parse + worker maps results by `scripts_by_idx[row["idx"]]`. Binding is by `idx`, not by row position — robust to the non-monotonic-id fixture (idx order [3,1,2]). Qa PASS.
+- AC3 (locked slides excluded from the batch) — defended at two layers: route filter `eq(scriptLocked, false)` at enqueue + worker re-filter against `script_locked=true` for TOCTOU. Qa run 2 confirms (a) narration call's payload does not contain locked slide's body / `Slide 2` header, (b) locked slide's pre-call script byte-identical post-call, (c) unlocked slides updated. Run 1 false-failure (deck_summary payload included locked-slide title) is independent of the exclusion logic itself — confirmed in run 2 commentary.
+- AC4 (all-or-nothing on call failure) — defended; handler intentionally does NOT pass `on_slide_done` (per `## Decisions and risks` line 50); `pipeline_runner.generate_scripts` returns the complete `{idx: narration}` dict only on success; `_parse_batched_response` raises if any requested idx is missing; the DB transaction opens AFTER the dict is collected. Qa cases (a) 5xx and (b) missing-idx both PASS — no partial DB mutation observed in either. The all-or-nothing guarantee extends to chunked decks (mid-chunk failure rolls back prior chunks) per line 50 — bigger guarantee than the spec strictly requires, accepted as honest framing.
+- AC5 (zero / single edge cases) — defended; zero short-circuits at route (`{job_ids: [], slide_ids: []}`) with no Claude call (qa call_count==0); single-slide path issues exactly one narration call (qa `_narration_call_count == 1`). No off-by-one observed.
+- AC6 (telemetry — exactly one `batched_slide_scripts` row per batch) — defended; `log_anthropic(call_type="batched_slide_scripts")` is invoked once per Claude call per `script.py:213-218`; `usage.csv` row count for the batched-narration `call_type` is 1 for N=5 in qa run 2. Engineer self-flags chunked-deck telemetry attribution at line 53 (N_chunks rows tagged `batched_slide_scripts` for chunked runs) — within the amended AC6 framing ("narration-call rows do not scale with N when ≤ chunk size"), this is consistent.
+- AC7 (per-slide `updated_at` bumped → Realtime fires per slide) — defended; worker writes via N individual `set_slide_script` UPDATEs in one transaction (per `## Decisions and risks` line 51) — explicitly chosen over `CASE WHEN…THEN…` bulk UPDATE precisely so per-row Realtime events fire. Qa confirms each in-scope slide's `updated_at` strictly greater post-batch.
+
+**Invariant defenses probed**
+
+- Locked stack — defended (no SQLite/Prisma/SQLAlchemy/Redis/Inngest additions; reuses Claude Haiku 4.5 + `gpt-4o-mini-tts` is untouched).
+- Haiku 4.5 + prompt caching on system prompt — defended; `cache_control: {type: "ephemeral"}` preserved at `script.py:201-207` (PR claim, line 39); reuses existing `BATCH_SYSTEM_PROMPT` from `full_render` path.
+- Haiku 4.5 cache floor (4096 tokens) — no regression claimed; PR explicitly notes the floor caveat from `memory/project_haiku_cache_floor.md` is unchanged. Acceptable per the spec's "must not regress wiring" framing.
+- Schema convention (`created_at`, `updated_at`, `deleted_at`; per-write `updated_at` bump) — defended via per-row `set_slide_script` bumping `updated_at = now()` and route-side enqueue-time `updated_at` bump for the Realtime trigger on the initial drafting state.
+- draft-all in-scope rule — defended (filter unchanged: `scriptLocked=false AND deletedAt IS NULL AND (script IS NULL OR script = '')`). Response shape `{job_ids, slide_ids}` preserved with `job_ids` now a one-element array.
+- Boundary 403/404 (pitfall #5) — defended; `getProjectForUser` chain + `UUID_RE` short-circuit preserved at `route.ts:45-48`.
+- Cost telemetry shape — defended; `usage_events` / `usage.csv` schema unchanged, no new column required.
+
+**Hard rules + pitfalls (`hats/engineering.md`)**
+
+- No `npm run build` introduced (CI uses `npx tsc --noEmit`).
+- Locked stack adhered (no forbidden packages).
+- Locked design tokens — N/A (no UI changes claimed in `What changed`).
+- Locked copy ("Draft all narrations" / "Draft this" / "Draft this slide") — preserved per spec out-of-scope item; PR doesn't paraphrase.
+- Auth posture — unchanged (anonymous `pptalk_uid` cookie via `getProjectForUser`).
+- Schema convention — defended above.
+- Sample read-only on edit routes — preserved via `getProjectForUser` 403 chain.
+- `/api/render/route.ts` (singular) — not extended; new flow goes through `/api/projects/[id]/draft-all` + `render_jobs` + worker, which is the v2 path.
+- Aspect ratio — N/A.
+- No time estimates anywhere — confirmed (no "should take a day" / "by Friday" prose anywhere in PR-8.md).
+- Pitfalls #1 (postgres-js singleton), #2 (`process.env[varName]`), #3 (dnd-kit SSR), #4 (CSS Grid 1fr), #6 (Next 15 ghost) — not in scope. Pitfall #5 (UUID at boundary) — explicitly defended.
+
+**Scope creep**
+
+- `pipeline/narrator/worker.py` — traces to AC1/AC4/AC5 (new dispatch arm + `_do_project_script_regen` handler).
+- `web/app/api/projects/[id]/draft-all/route.ts` — traces to AC1/AC3/AC5 (one job replaces N).
+- `web/lib/db/schema.ts` — traces to the new `project_script_regen` job-kind comment in `render_jobs.kind` (supporting; minimal).
+- All three files trace to acceptance criteria. No scope creep, no smuggled refactors.
+
+**QA gate**
+
+- Run 1 (FAIL) flagged spec ambiguity around the `summarize_deck` setup call → spec amended (commit 46b1457) → Run 2 (PASS) with all 9 tests green. CI baseline green in both runs (`✓ CI green` marker present in last 5 lines).
+- Test infra fixes on the test branch (cookie auth, 200/202 status, fixture PNG bytes) confined to `test/bulk-regen-batch`; no product code touched. Acceptable.
+
+**Doc style (PR-8.md as a doc)**
+
+- Sentence-case headings, ISO `YYYY-MM-DD` / ISO timestamp dates, `-` bullets, no emoji, no time estimates. Compliant with `DOCS-STYLE.md`.
+
+**Decisions-and-risks honesty probe**
+
+- Engineer's `## Decisions and risks` is candid: (1) new-job-kind choice with rationale (queue uniformity + spec out-of-scope grants this latitude), (2) defensive worker re-filter for TOCTOU, (3) all-or-nothing trade-off acknowledging chunked decks lose mid-render UI fill on bulk regen, (4) N UPDATEs vs. CASE-WHEN choice tied to AC7 Realtime requirement, (5) chunked-deck risk explicitly flagged for reviewer/qa with reading-of-AC1 framing, (6) chunked telemetry attribution flagged. None of these contradict the spec; (3) and (5) extend guarantees beyond the spec rather than hide gaps.
+
+**Open adversarial questions for the engineer (non-blocking)**
+
+- Chunked decks (>40 slides) issue N_chunks narration calls; spec test surface targets ≤40 so the contract holds, but a 60-slide demo deck would observe 2 narration calls. Worth a CHANGELOG note when shipping so post-merge demos aren't surprised, or a follow-up spec to lift `BATCH_CHUNK_SIZE`. Documented as a risk on PR line 52.
+- Worker's TOCTOU re-filter drops slides that became `script_locked=true` or absent-from-deck between enqueue and run. Does the candidate set returned by `_get_slides` already exclude `deleted_at IS NOT NULL`? PR phrasing implies yes ("absent from the deck"), but a one-line confirmation in `## Invariant defense` would close it.
+- The all-or-nothing transaction shape extends to mid-chunk failure on chunked decks (rolls back prior-chunk writes too) — bigger guarantee than the spec requires. Worth noting whether this introduces transaction-size pressure for very large decks (e.g. 200-slide). Not in spec test surface; non-blocking.
+
+**Verdict: APPROVED**
 
 ## Telemetry
 <!-- filled by team-lead post-merge -->
