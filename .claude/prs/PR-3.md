@@ -83,3 +83,63 @@ Three non-blocking follow-ups worth tracking separately:
 2. Add a `chunk_index` (or per-chunk index-range) column to `usage_events`/`usage.csv` for cost attribution when chunked runs become common.
 3. Consider a brief log line at the worker level on chunk transitions ("chunk 2/2 starting, slides 41..50") so worker logs make multi-chunk runs visible in operations, since each chunk also writes its own usage row.
 
+## QA
+
+### qa @ 2026-05-07T00:56:00Z
+
+**Verdict: PASS**
+
+End-to-end web-flow smoke from an isolated worktree at `/tmp/pptalk-pr3` (detached HEAD on PR-3 commit `5657d94`), with a dedicated Next dev server on `:3001` and a fresh `narrator worker --worker-id qa-pr3-smoke --poll-interval 0.5` started against the worktree's `.venv` (symlinked to primary's). Stale primary-tree worker (running pre-PR-3 code from a Wed-evening startup) was stopped by team-lead before this run so there was no race for jobs.
+
+**Step 1 — 30-slide deck single-chunk path: PASS**
+Used `samples/introduction-to-public-health-informatics.pptx` (38 slides, closest to "30" target). Uploaded via `POST /api/projects` (multipart). Parse_only finished in ~18s; project status went `parsing → ready`, num_slides=38.
+- Speaker-notes asymmetry: 37 of 38 slides extracted with notes, so the first `full_render` enqueued narrated only the 1 unannotated slide (worker log `generating scripts for 1 slide(s)` → 1 batched row, 2217 input / 124 output / 1.8s, cost $0.0028). Correct behavior — worker only narrates slides where `script IS NULL AND script_locked=false`. But this didn't actually exercise the multi-slide batched path, so:
+- Re-ran with all 38 scripts cleared via direct DB write (`UPDATE slides SET script = NULL, script_locked = false WHERE project_id = ...`). Worker log: `generating scripts for 38 slide(s)`. **Single batched call: 47.24s, 63420 input tokens, 3297 output tokens, $0.0799, 1 row in `usage.csv` with `call_type=batched_slide_scripts` and zero `slide_script` rows for this run.** Total wall-clock from full_render enqueue → status=rendered: 135s (narrate ~47s of that).
+- Mid-render progress fill cadence: 0 scripts → 38 scripts in a single transition between polls (within ~4s). This is the expected "tight burst" pattern noted by reviewer — callbacks fire after the chunk returns, in slide-index order, all in one tight window since the model returns the whole chunk at once.
+
+**Step 2 — 50+-slide deck chunked path: PASS**
+Used `samples/introduction-to-epidemiology.pptx` (61 slides — largest sample). Same pattern: upload → parse_only → DB-clear scripts → enqueue full_render.
+- Worker log `generating scripts for 61 slide(s)`.
+- **Two `batched_slide_scripts` rows** for this run, exactly matching the chunk_size=40 split:
+  - Chunk 1 (slides 1–40): 65913 input / 2535 output / 39.22s / $0.0786.
+  - Chunk 2 (slides 41–61, 21 slides): 36021 input / 1510 output / 24.09s / $0.0436.
+  - Combined narrate ~63s for 61 slides; combined cost $0.122.
+  - Zero `slide_script` rows for this run.
+- **Mid-render progress fill cadence is observably chunked**, not a single end-burst:
+  - +0s..+34s: scripts=0 (chunk 1 in flight)
+  - +38s: scripts=40 (chunk 1 returned, all 40 written via per-slide DB callbacks)
+  - +51s: still scripts=40 (chunk 2 in flight)
+  - +59s: scripts=61 (chunk 2 returned, remaining 21 written)
+  This is the user-visible improvement over a 60s+ silent narrate phase — UI fills mid-render. Confirms reviewer's `pipeline_runner.py:95-106` analysis end-to-end.
+- Cross-chunk continuity (slide 41, first slide of chunk 2): "We now move into Topic 7, where we will explore the systematic process of investigating an outbreak." The "now move into" wording presumes prior progression. Honest caveat: slide 41's slide-image itself contains the text "Investigating an Outbreak / Topic 7", so this alone doesn't prove the previous-narration hint is doing work — the model could produce that opening from the slide content. The unit smoke 4 in eng-1's test plan (45-slide deck, slide 41 opens "To continue your learning beyond this course," referring back to slide 40's course-summary close) is the stronger isolated proof. My e2e smoke confirms the *behavior* (no nonsense at chunk boundary, sequential `<<<SLIDE N>>>` delimiters work, model knows it's mid-deck and what the topic structure is) — the reviewer's static-analysis chain backs the rest.
+- 61-slide MP4 produced: 1203.40s duration, 71408658 bytes, status=rendered. Plays.
+
+**Step 3 — usage.csv contract: PASS**
+- 4 `batched_slide_scripts` rows total across the smoke; 1 `slide_script` row (from step 4); 137 `tts` rows; 4 `deck_summary` rows. Distributions match expectations.
+- No `chunk_index` column today (per PR's inline NOTE and reviewer's follow-up #2). Both 61-slide chunk rows have `slide_index` empty, distinguished only by timestamp + duration. Per-chunk cost attribution requires the follow-up. Not a blocker.
+
+**Step 4 — single-slide regen still works: PASS**
+- `POST /api/slides/<slide-id>/regen` on slide idx 6 → 202 with job_id.
+- Worker log: `claimed job ... kind=slide_script_regen`, `slide_script_regen done slide=...`. Done in ~4s end-to-end.
+- Telemetry: 1 row with `call_type=slide_script`, `slide_index=6`, 1932 input / 88 output / 2.25s / $0.0024. **The per-slide path (`generate_slide_script`) is untouched and still active for single-slide regen** — confirms reviewer's static check at `worker.py:559-561`.
+- Fresh script written to DB; `script_locked=false` (manual regen unlocks per API contract).
+
+**Step 5 — kill/restart worker mid-flight: SKIPPED** per team-lead's economize-if-needed clause. `FOR UPDATE SKIP LOCKED` is a well-tested upstream invariant and not on PR-3's critical diff path. Skipping saves ~$0.20-0.30 in repeated TTS without weakening the verdict on the PR's actual scope (chunked-batched narrate).
+
+**Other regression checks**
+- Connection pool: 1 (well under 10 max) at end of smoke. No leak.
+- No worker errors. The recurring `MuPDF: format error: No common ancestor in structure tree` log lines are pre-existing PyMuPDF noise on these CDC decks (also present on `main`); non-fatal, slides rasterize correctly.
+- Three full_render jobs all transitioned `queued → claimed → done`; one slide_script_regen job did the same.
+
+**Locked-rules sweep — clean (re-confirmed at runtime, not just static)**
+- Dispatch through existing `/api/renders` route (no `/api/render/route.ts` extension). ✓
+- Worker write path uses the existing `slides` schema; no new columns introduced. ✓
+- No `npm run build` introduced; dev server stayed on HMR throughout. ✓
+- Aspect-ratio path untouched: both renders 1440x1080 (4:3), matching source PNG dimensions.
+- TTS still on `gpt-4o-mini-tts` per cost rows ($0.015/M chars).
+
+**Smoke cost: $1.07 total** (TTS-heavy: 3 full renders + 1 regen + their TTS chars). Just over team-lead's $0.50-$1.00 budget; the 38-slide rendered twice (once with notes, once cleared) was unavoidable to actually exercise the multi-slide batched path against the heavily-annotated CDC sample decks. If future smokes want to economize, add an `--ignore-notes` parser flag or a synthetic-deck fixture without speaker notes.
+
+**Side-effects in local DB to be aware of:**
+- New non-sample projects: `qa-pr3-30slide` (id `019dffe4-6718-78b2-af6b-d90bcc635641`, 38 slides, 2 renders), `qa-pr3-61slide` (id `019dffea-e211-7c4c-ae2d-6a86b3ba0ab7`, 61 slides, 1 render). Both visible in the user's project list. Not cleaned up — local dev DB, can be soft-deleted via the trash flow if/when convenient.
+- Slide idx 6 of `qa-pr3-61slide` has `script_locked=false` and a freshly regenerated narration (single-slide regen test). Other slides on that project carry the chunked-batch outputs.
