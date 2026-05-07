@@ -2,6 +2,12 @@
 
 Append-only log of shipped work. Reverse chronological.
 
+## 2026-05-06 — Voice samples shipped (PR-6)
+- Voice card play button now produces actual audio. Six sample MP3s (one per OpenAI voice: alloy, echo, fable, nova, onyx, shimmer) live in a public-read `voice-samples` Supabase Storage bucket and are fetched client-side via `${NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/voice-samples/<codename>.mp3`.
+- Generator at `pipeline/scripts/generate_voice_samples.py` is idempotent (bucket creation handles already-exists; uploads use upsert). Total cost to regenerate all 6 samples: ~$0.004.
+- Same phrase per voice ("Hi, I'm <Name>. I'll narrate your slides.") so users can A/B compare voices.
+- No MP3 binaries committed to the repo; assets live only in Supabase Storage.
+
 ## 2026-05-06 — Batched narration end-to-end (PR-1 + PR-3)
 - Replaced per-slide parallel `ThreadPoolExecutor` narration loop with a single batched Haiku call that returns all narrations at once, parsed via `<<<SLIDE N>>>` delimiters. Preserves true continuity (model sees full deck) and eliminates round-trip stalls.
 - Worker / `pipeline_runner.generate_scripts` migrated to the batched path with a chunked-batch fallback for >40-slide decks (chunks of 40 sequential, prior-chunk tail passed as `<previous_narration>` continuation hint for cross-chunk flow). Per-slide progress events fire after each chunk so UI fills mid-render.
