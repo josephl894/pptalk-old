@@ -17,7 +17,7 @@ import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { PlayIcon, DiamondIcon, SparkleIcon } from '@/components/shell/icons';
-import { VoiceLibraryOverlay, voiceLabel } from './VoiceLibraryOverlay';
+import { VoiceLibraryOverlay, voiceLabel, voiceSampleUrl } from './VoiceLibraryOverlay';
 import type { EditorSlide } from './types';
 
 const REGEN_TIMEOUT_MS = 30_000;
@@ -50,7 +50,7 @@ export function ScriptPanel({
         /* ignore */
       }
     }
-    const a = new Audio(`/voices/${codename}.mp3`);
+    const a = new Audio(voiceSampleUrl(codename));
     sampleAudioRef.current = a;
     // Single toast path: `play()`'s rejection on a missing source fires
     // before `onerror` (NotSupportedError when no source loads), so handle

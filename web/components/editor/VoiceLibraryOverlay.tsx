@@ -54,6 +54,21 @@ function findVoice(codename: string): Voice {
   return VOICES.find((v) => v.codename === codename) ?? VOICES[5]; // alloy
 }
 
+/**
+ * Public URL for a voice preview sample stored in the `voice-samples`
+ * Supabase Storage bucket. The bucket is public-read, so no signed URL is
+ * needed — clients compose the URL from `NEXT_PUBLIC_SUPABASE_URL`.
+ *
+ * Literal `process.env.NEXT_PUBLIC_*` access is required for webpack to
+ * inline the value into the client bundle (see `hats/engineering.md`
+ * patterns and pitfalls #2). Bracket access would silently resolve to
+ * `undefined` in the browser.
+ */
+export function voiceSampleUrl(codename: string): string {
+  const base = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+  return `${base}/storage/v1/object/public/voice-samples/${codename}.mp3`;
+}
+
 export function VoiceLibraryOverlay({
   open,
   onOpenChange,
@@ -91,7 +106,7 @@ export function VoiceLibraryOverlay({
       setPreviewing(null);
       return;
     }
-    const a = new Audio(`/voices/${codename}.mp3`);
+    const a = new Audio(voiceSampleUrl(codename));
     audioRef.current = a;
     a.onended = () => setPreviewing((p) => (p === codename ? null : p));
     setPreviewing(codename);
