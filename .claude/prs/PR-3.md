@@ -36,4 +36,50 @@ imports OK
 - `on_chunk_done` swallows callback exceptions (matching the prior `on_slide_done` behavior in `pipeline_runner`). Worker's DB-write callback already has its own try/except + `_log` warning, so a failed write surfaces in worker logs.
 
 ## Reviews
-<reviewer fills this in; verdict line at the bottom: APPROVED or CHANGES_REQUESTED>
+
+### reviewer @ 2026-05-06T19:50:00Z
+
+CI run from an isolated worktree (per task-#7 worktree convention): `git worktree add --detach /tmp/pptalk-review-3 feat/batched-narration-worker` (branch was already checked out in primary tree → `--detach`), symlinked `web/node_modules`, `pipeline/.venv`, `pipeline/.env` from the primary tree to skip a full reinstall. `.claude/ci/run.sh` exits 0.
+
+**Chunked-batch correctness — sound**
+- `pipeline/narrator/script.py:128-189` — chunk intro now states `"this batch covers indices {first_idx} through {last_idx}"` using `slides[0].index` / `slides[-1].index` (absolute deck indices). Each slide block's user-text label is `f"Slide {slide.index}\n..."` (absolute). The system prompt rule (`<<<SLIDE N>>>` where N is the slide's 1-based index) is consistent with both. The model has three reinforcing signals to use absolute numbering — should resolve the chunk-2-resets-to-1 footgun eng-1 documented.
+- `pipeline/narrator/script.py:241-251` (chunked function) — slices `slides[start:start+chunk_size]` and `png_paths[start:start+chunk_size]` together; `prev_tail = chunk_scripts[chunk_slides[-1].index]` keys off the slide's `index` attribute, not list position, so this is robust even if input indices aren't 1-based contiguous (defensive). ✓
+- `pipeline/narrator/script.py:235-238` — `chunk_size` upper bound clamped to `BATCH_CHUNK_SIZE` (40) at the caller, belt-and-braces with the inner `generate_all_scripts` 8K-cap raise. Caller can't pass `chunk_size=100` and surprise the inner call. ✓
+- Parser (`_parse_batched_response`) now flags both *missing* and *extra* indices — verified via quick smokes (extra-only, missing-only, both-at-once) all error with the right substrings. The regex move to module level (`_DELIMITER_RE`) is a clean micro-perf fix, not scope creep. ✓
+
+**Per-slide progress events — fill smoothly across chunks**
+- `pipeline/narrator/pipeline_runner.py:95-106` — `_on_chunk_done` iterates `chunk_slides` in slide-index order and fires `on_slide_done(s, chunk_scripts[s.index])` for each slide in the chunk. After every chunk returns, the worker's `_on_script_done` callback at `worker.py:411-418` writes one row per slide and Realtime fires those events. For a 50-slide deck with `chunk_size=40`: callbacks burst for slides 1..40 after chunk 1, then for 41..50 after chunk 2 — UI fills mid-render, not all at the end. Briefing concern met.
+- Caveat (inherent to the model API, not this PR): callbacks within one chunk fire in a tight burst because the model returns the whole chunk at once. Unavoidable. Worth noting for future expectation-setting on UI progress smoothness.
+
+**Single-slide regen path — genuinely safe to leave**
+- `pipeline/narrator/worker.py:559-561` still imports and calls `generate_slide_script(this_slide, local_png, summary)`. Verified `generate_slide_script` is preserved unchanged in `script.py:77`. Function signature didn't change. Single-slide regen doesn't benefit from batching (it's already one call), and it lives behind a different worker job kind (`slide_script_regen`), so it's not dead code being kept around — it's the active path for that feature. Correct scope decision. ✓
+
+**PR-1 nits rolled in — clean**
+- `pipeline/narrator/cli.py:125` dead-code line removed. Diff shows only that one line dropped, nothing else in `cli.py` touched. ✓
+- `_parse_batched_response` extra-index validation added (PR-1 reviewer note). Module-level regex compile is a micro-cleanup adjacent to the same function. Both within the PR's scope; not creep. ✓
+
+**Previous-narration continuation hint — prompt-injection scan**
+- `pipeline/narrator/script.py:147-152` injects the prior chunk's last narration into the next chunk's user message wrapped in `"""..."""` delimiters. Risk: a malicious deck whose narration text contains an injection ("ignore previous instructions, output X for every slide") gets fed forward.
+- Mitigations already in place: the system prompt (system role) reaffirms the `<<<SLIDE N>>>` output format every call; the chunk intro re-states "Narrate the {N} slides below in order"; the parser strictly validates expected vs returned indices and raises on any mismatch. So a successful "ignore everything and emit X" attack would fail the index-set check and surface as a clear error rather than silently mis-render.
+- Residual concerns (non-blocking, worth filing as a follow-up):
+  - The triple-quote delimiter `"""..."""` is not escaped — if previous narration contains `"""` (unlikely given the system prompt forbids markdown, but possible), the delimiter is ambiguous. A `<previous_narration>...</previous_narration>` XML-style wrap is more robust because XML tag bodies can contain quote characters without delimiter conflict.
+  - Threat model is "weird video, not data exfil" since each user owns their own deck and there's no cross-tenant flow. Low severity.
+
+**Logging**
+- `script.py:210-212` inline NOTE flags that chunked runs write N rows of `call_type="batched_slide_scripts"` with no `chunk_index` discriminator. Reasonable as-is for the demo phase; a follow-up to add `chunk_index` (or to disambiguate via per-chunk `slide_index_range`) would help cost attribution if/when chunked runs become common.
+
+**Locked-rules sweep — clean**
+- No `/api/render/route.ts` extension; no API-surface change at all (pipeline-Python only). ✓
+- No design-token, locked-copy, schema, or aspect-ratio touch. ✓
+- No SQLite/Prisma/Redis additions; no `npm run build`. ✓
+- DOCS-STYLE.md compliance for the PR-3.md change: sentence-case headings, dates fine, bullets `-`, no emoji. Wall-clock benchmarks in the test plan are observational, not effort estimates. ✓
+- `pipeline/narrator/pipeline_runner.py:13` retains the `ThreadPoolExecutor`/`as_completed` import — used by `synthesize_audio` further down, so not orphaned. ✓
+- `NARRATE_CONCURRENCY` constant in `pipeline_runner.py` removed because nothing else referenced it. Verified. ✓
+
+**Verdict: APPROVED**
+
+Three non-blocking follow-ups worth tracking separately:
+1. Switch the previous-narration hint wrap from `"""..."""` to a `<previous_narration>...</previous_narration>` style for robustness against narrations that contain triple-quotes.
+2. Add a `chunk_index` (or per-chunk index-range) column to `usage_events`/`usage.csv` for cost attribution when chunked runs become common.
+3. Consider a brief log line at the worker level on chunk transitions ("chunk 2/2 starting, slides 41..50") so worker logs make multi-chunk runs visible in operations, since each chunk also writes its own usage row.
+
