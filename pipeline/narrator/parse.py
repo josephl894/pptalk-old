@@ -15,7 +15,7 @@ class Slide:
 def parse(pptx_path: Path) -> list[Slide]:
     prs = Presentation(str(pptx_path))
     slides: list[Slide] = []
-    for i, slide in enumerate(prs.slides, start=1):
+    for i, slide in enumerate(prs.slides):
         title_text = ""
         body_parts: list[str] = []
         title_shape = slide.shapes.title

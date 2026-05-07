@@ -31,7 +31,7 @@ def parse(pdf_path: Path) -> list[Slide]:
 
     slides: list[Slide] = []
     try:
-        for i, page in enumerate(doc.pages(), start=1):
+        for i, page in enumerate(doc.pages()):
             try:
                 raw = page.get_text("text") or ""
             except Exception as exc:

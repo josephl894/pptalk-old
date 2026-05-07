@@ -287,6 +287,28 @@ export function EditorShell({
   );
   const rendering = !!renderJob;
 
+  const parseJob = activeJobs.find((j) => j.kind === 'parse_only');
+  const parsing = project.status === 'parsing';
+
+  // Re-tick periodically while a parse job is queued so the "worker stalled"
+  // banner appears on time without needing a new event from the server.
+  const [now, setNow] = React.useState<number>(() => Date.now());
+  React.useEffect(() => {
+    if (!parseJob || parseJob.status !== 'queued') return;
+    const id = window.setInterval(() => setNow(Date.now()), 5_000);
+    return () => window.clearInterval(id);
+  }, [parseJob?.id, parseJob?.status]);
+
+  const workerStalled = React.useMemo(() => {
+    if (!parseJob || parseJob.status !== 'queued') return false;
+    const created =
+      typeof parseJob.created_at === 'string'
+        ? Date.parse(parseJob.created_at)
+        : new Date(parseJob.created_at).getTime();
+    if (!Number.isFinite(created)) return false;
+    return now - created > 30_000;
+  }, [parseJob?.id, parseJob?.status, parseJob?.created_at, now]);
+
   const hasSpeakerNotes = !!selectedSlide?.speaker_notes?.trim();
 
   // ---------------------------------------------------------------------
@@ -388,6 +410,10 @@ export function EditorShell({
   // Render
   // ---------------------------------------------------------------------
 
+  const showWorkerNotice = workerStalled;
+  const showParsingNotice = parsing && !workerStalled;
+  const banner = showWorkerNotice || showParsingNotice;
+
   return (
     <div
       className="grid h-screen w-screen overflow-hidden bg-[color:var(--paper-2)]"
@@ -396,7 +422,7 @@ export function EditorShell({
         // center column inflates to its content's intrinsic size — the slide
         // image at 1080px high would otherwise push the row past 100vh and
         // hide content under the fold.
-        gridTemplateRows: '52px minmax(0, 1fr)',
+        gridTemplateRows: banner ? '52px auto minmax(0, 1fr)' : '52px minmax(0, 1fr)',
         gridTemplateColumns: '168px minmax(0, 1fr) 296px',
       }}
     >
@@ -473,6 +499,65 @@ export function EditorShell({
           </button>
         </div>
       </header>
+
+      {banner && (
+        <div
+          role={showWorkerNotice ? 'alert' : undefined}
+          data-testid={
+            showWorkerNotice
+              ? 'worker-not-available'
+              : 'parse-in-progress'
+          }
+          style={{ gridColumn: '1 / 4' }}
+          className="flex items-start gap-3 border-b border-[color:var(--hairline)] bg-[color:var(--paper)] px-5 py-3"
+        >
+          {showWorkerNotice ? (
+            <>
+              <div
+                aria-hidden
+                className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[color:var(--accent-tint)] text-[color:var(--accent-2)]"
+              >
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 1.5v4.5" />
+                  <circle cx="6" cy="9" r="0.6" fill="currentColor" stroke="none" />
+                </svg>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="t-13 font-medium text-[color:var(--ink)]">
+                  Render worker is not running
+                </div>
+                <div className="t-12 mt-0.5 text-[color:var(--ink-3)]">
+                  Slides will start parsing as soon as the worker is up. From the
+                  pipeline directory, run{' '}
+                  <code className="rounded bg-[color:var(--paper-2)] px-1 py-0.5 font-mono text-[11px]">
+                    uv run narrator worker
+                  </code>
+                  . Your upload is safe — the queued job will be picked up automatically.
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                aria-hidden
+                className="mt-0.5 inline-flex h-5 w-5 shrink-0 animate-pulse items-center justify-center rounded-full bg-[color:var(--paper-2)] text-[color:var(--ink-3)]"
+              >
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="6" cy="6" r="3.5" />
+                </svg>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="t-13 font-medium text-[color:var(--ink)]">
+                  Parsing your deck…
+                </div>
+                <div className="t-12 mt-0.5 text-[color:var(--ink-3)]">
+                  Slides will appear here as soon as parse finishes.
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <SceneRail
         slides={slides}
