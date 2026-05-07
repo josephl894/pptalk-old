@@ -81,7 +81,53 @@ imports OK
 
 ## QA gate
 
-(To be filled by qa.)
+### qa @ 2026-05-07T03:35:00Z
+
+**Gate worktree:** /tmp/pptalk-qa-gate-7 (created --detach off fix/pdf-parse @ 1775db5, merged test/pdf-parse @ cc4d346)
+
+**Pre-run subprocesses (gate worktree only):**
+- `next dev --port 3001` (pid 32769) — :3001, served all three ACs
+- `uv run narrator worker` (pid 33174) — covered AC1's "running worker" precondition; killed (-9) before AC3
+- AC3 verified worker-not-running precondition via `pgrep -fl "narrator worker"` returning empty
+
+**Test results**
+
+- AC1 (Given a fresh anonymous user (no `pptalk_uid` cookie) and a running worker, When the user uploads a valid multi-page PDF on /new, Then within 30 seconds of upload completion the user is at `/p/<project_id>` with one slide thumbnail per PDF page rendered in the filmstrip and the "parsing" UI is no longer visible.) — **PASS**:
+  - `bash .claude/qa/spec-7/ac1_happy_path.sh` exit 0.
+  - Uploaded `fixtures/three_page.pdf`, project_id=`019e007a-83be-7b8f-8e03-e4134137a532`.
+  - GET `/api/projects/{id}` returned `project.status='ready'` and `slides.length=3` after **1s**, well under the 30s envelope.
+  - 0-based idx fix from `parse_pdf.py` confirmed by AC2's idx check below.
+
+- AC2 (Given AC1's flow completed successfully, Then the corresponding `render_jobs` row has `status = 'completed'` and `kind = 'parse_only'`, the `slides` table has exactly N rows for that `project_id` (where N = PDF page count) with `idx` values 0..N-1, and every slide row has a non-null `image_path` whose object resolves via the Supabase Storage signed-URL helper.) — **FAIL** (single literal-text mismatch; all other AC2 sub-checks PASS):
+  - `bash .claude/qa/spec-7/ac2_db_end_state.sh 019e007a-83be-7b8f-8e03-e4134137a532` exit 1.
+  - Sub-results:
+    - `render_jobs.kind='parse_only'` AND `status='done'`. **Expected `status='completed'`** — the schema enum is `'queued' | 'running' | 'done' | 'failed'` (per engineer's `## Decisions and risks` final bullet). All 81 successful jobs in the DB across all kinds use `'done'`, predating SPEC-7. This is the same literal-vs-schema shape as AC3's `pending`/`queued` ambiguity that team-lead amended on commit `7891dc3` — recommend the same amendment for AC2 (`'completed'` → `'done'/'completed'` or "schema's successful terminal state"). Engineer flagged this in the PR file before the run; my test asserted the literal spec text and FAILed accordingly.
+    - slides row count = 3 ✓
+    - slides idx values = 0,1,2 ✓ (the 0-based fix in `parse_pdf.py` works as the engineer claimed)
+    - every slide row has non-null `png_path` ✓
+    - all three `png_path` values resolved via `POST /storage/v1/object/sign/pptalk-private/...` with HTTP 200 on the signed HEAD ✓
+  - Verdict: PASS on the substantive contract (engineer satisfied the spec's intent); FAIL on the literal text. Routing recommendation: SPEC amendment, not engineer rework.
+
+- AC3 (Given the worker is NOT running, When the user uploads a PDF on `/new` (or refreshes into the editor while the parse_only job is unclaimed past a bounded threshold), Then within 60 seconds the parsing UI surfaces a recoverable, non-blocking message indicating the render worker is not available — must (a) name the worker, (b) suggest starting it, and (c) not block other UI from rendering. The job row stays `pending`/`queued` (not `failed`) so a started worker still picks it up.) — **PASS**:
+  - `bash .claude/qa/spec-7/ac3_worker_not_running.sh` exit 0.
+  - Uploaded `fixtures/three_page.pdf`, project_id=`019e007b-a72e-7499-b963-988d2828d8f0`, worker confirmed offline.
+  - DOM signal matched within **30s** (≤60s envelope) — `/p/{id}` HTML body contains both `/worker/i` and one of `/start|run|launch/i`, satisfying the "names the worker + suggests starting it" requirement.
+  - `render_jobs.status='queued'` (re-claimable, not `failed` and not `done`), satisfying the "started worker still picks it up" requirement.
+  - `GET /p/{id}` → HTTP 200, 42820 bytes — UI is rendering, not blocked.
+
+**CI baseline:** `.claude/ci/run.sh` — green:
+```
+→ TS type-check (web)
+→ Python import smoke (pipeline)
+imports OK
+✓ CI green
+```
+
+**Test-mechanics fix applied during the run.** The three smokes' anonymous-cookie bootstrap step originally hit `GET /` to mint `pptalk_uid`. The actual cookie is set by the `/api/projects` route, not the home page render path; the smokes now bootstrap via `GET /api/projects`. Mechanics-only — does not change what is asserted. The fix has been re-applied to the gate worktree's copy of the smokes; recommend backporting to `test/pdf-parse` so future re-runs and the eventual merge to `main` carry the corrected bootstrap.
+
+**Verdict: FAIL** (AC2 literal-text mismatch only)
+
+**For team-lead:** AC1 and AC3 fully pass. AC2 fails only on the spec's literal `'completed'` vs the schema's `'done'`. This is the same shape as the `pending`/`queued` amendment already accepted in commit `7891dc3`. Recommended path: amend SPEC-7 AC2 to accept `'done'` (schema enum) as the spec's "completed" semantic, then re-gate trivially without engineer rework — every other AC2 sub-check already passes against the engineer's branch. If you decline the amendment, route to engineer and the rework would touch the project-wide `render_jobs.status` enum + worker + queries + Realtime subscribers (engineer flagged this scope in `## Decisions and risks`).
 
 ## Reviews
 
