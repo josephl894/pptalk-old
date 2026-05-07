@@ -38,18 +38,26 @@ from narrator.db import close_pool, connection
 
 # Anonymous "system" user used by sample-deck seeding; tests use a freshly
 # minted user to avoid colliding with anyone else's projects.
-def _new_user(conn) -> UUID:
+def _new_user(conn) -> tuple[UUID, str]:
+    """Insert a fresh user row. Returns (user_id, browser_id).
+
+    `browser_id` is set to `str(user_id)` so the test can use the same value
+    as the `pptalk_uid` cookie — the route's auth helper looks users up by
+    `browser_id`, not by `id`, so the cookie value must match the user's
+    `browser_id` column for the route to recognize the project's owner.
+    """
     user_id = uuid7()
+    browser_id = str(user_id)
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO users (id, browser_id, created_at, updated_at)
             VALUES (%s, %s, now(), now())
             """,
-            (user_id, f"spec8-{user_id}"),
+            (user_id, browser_id),
         )
     conn.commit()
-    return user_id
+    return user_id, browser_id
 
 
 def _delete_project(conn, project_id: UUID) -> None:
@@ -98,7 +106,7 @@ def make_fixture_project(db_conn):
     created: list[tuple[object, UUID]] = []  # (conn-for-cleanup-discovery, project_id)
 
     def _make(slide_specs: list[dict], *, name: str = "spec8-fixture") -> dict:
-        user_id = _new_user(db_conn)
+        user_id, browser_id = _new_user(db_conn)
         project_id = uuid7()
         with db_conn.cursor() as cur:
             cur.execute(
@@ -145,6 +153,7 @@ def make_fixture_project(db_conn):
         created.append(project_id)
         return {
             "user_id": user_id,
+            "browser_id": browser_id,
             "project_id": project_id,
             "slides": inserted_slides,
         }
