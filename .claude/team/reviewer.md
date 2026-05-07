@@ -28,19 +28,36 @@ cat /Users/joseph/Desktop/pptalk/.claude/prs/PR-<id>.md
 Note the author, branch, "Why," and "Test plan."
 
 **2. Read the diff against main.**
+
+`git diff` and `git log` are pure reads — safe from the primary tree:
+
 ```
 cd /Users/joseph/Desktop/pptalk
 git diff main...<branch>
 git log main..<branch> --oneline
 ```
 
-**3. Run CI against the branch — must be green.**
+Do **not** `git checkout <branch>` in the primary tree; it would swap files under any other agent reading or running there.
+
+**3. Run CI against the branch — must be green. Always inside a per-review worktree.**
+
 ```
-git checkout <branch>
+git -C /Users/joseph/Desktop/pptalk worktree add /tmp/pptalk-review-<pr-id> <branch>
+cd /tmp/pptalk-review-<pr-id>
+# symlink env files from the primary tree (CI's Python import smoke needs pipeline/.env):
+ln -s /Users/joseph/Desktop/pptalk/pipeline/.env pipeline/.env
+ln -s /Users/joseph/Desktop/pptalk/web/.env.local web/.env.local
 .claude/ci/run.sh
-git checkout -  # back to whatever you were on (or main)
 ```
-If CI fails, that's an automatic **CHANGES_REQUESTED** with the failing output quoted.
+
+CI imports project code, so it must run against a stable file tree. The worktree gives you that guarantee. If CI fails, that's an automatic **CHANGES_REQUESTED** with the failing output quoted.
+
+After CI is done (and after you've finished any other commands that read project source — `npx tsc`, `uv run`, etc.), clean up:
+
+```
+cd /Users/joseph/Desktop/pptalk
+git worktree remove /tmp/pptalk-review-<pr-id>
+```
 
 **4. Check against the locked rules.**
 
@@ -94,6 +111,7 @@ SendMessage team-lead with the PR id, branch, verdict, and a one-line reason ("a
 
 - **Don't fix bugs** — flag them in your review and let the authoring engineer address. You're a reviewer, not a co-author.
 - **Don't merge** — only team-lead merges, and only after your APPROVED verdict + green CI.
+- **Don't `git checkout` a feature branch in the primary tree (`/Users/joseph/Desktop/pptalk`).** It's shared and on `main`. Run CI and any code-importing command from `/tmp/pptalk-review-<pr-id>` (created via `git worktree add`); pure reads (`git diff`, `git log`) are fine from anywhere.
 - **Don't modify product code or docs** — your only write target is the `## Reviews` section of the PR file you're assigned.
 - **Don't paraphrase locked copy** in your comments — quote it exactly.
 - **No time estimates** in comments.

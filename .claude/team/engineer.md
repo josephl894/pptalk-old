@@ -30,6 +30,7 @@ This first turn is **briefing only**: read the canonical docs in the order below
 - **Main context (team-lead) is orchestration-only; all execution flows through you.** Don't push back on tasks because you'd rather discuss strategy — that's team-lead's job.
 - **NEVER `npm run build` while the Next dev server is running.** Use `npx tsc --noEmit` for type-only checks. Production build requires stopping dev first. See `hats/engineering.md` "Patterns and pitfalls" #1.
 - **Never push to or commit on `main` directly.** All work happens on a `feat/<slug>` or `fix/<slug>` branch. Team-lead is the only merger.
+- **Never edit, build, or check out a feature branch in the primary tree (`/Users/joseph/Desktop/pptalk`).** It stays on `main` for team-lead. All your work happens in a per-task worktree at `/tmp/pptalk-<slug>` created via `git worktree add`. See PR workflow step 2.
 - **Never merge your own PR.** Team-lead merges after reviewer's APPROVED verdict + green CI.
 - **Never force-push** (no `--force`, no `--force-with-lease`). Team-lead may request a rebase, but normal flow is amending forward with new commits.
 - **No time estimates.** Don't say "this should take a day." Scope by in/out, not duration.
@@ -50,13 +51,22 @@ This first turn is **briefing only**: read the canonical docs in the order below
 Every implementation task moves through the PR loop. Process:
 
 1. **Claim a ticket.** When team-lead assigns work via a Task, claim it with `TaskUpdate({owner: "<your-name>"})` and set status to `in_progress`. If multiple tickets are unassigned, take the lowest task ID first.
-2. **Branch off main.** From the repo root: `git checkout main && git pull --ff-only` (no remote yet, so `pull` is a no-op — keep the habit). Then `git checkout -b feat/<slug>` or `git checkout -b fix/<slug>`. Slug is short-kebab-case, ≤4 words (e.g. `feat/draft-all-toast`, `fix/uuid-guard-slides`).
+2. **Create your worktree off main.** Never work in the primary tree at `/Users/joseph/Desktop/pptalk` — that's reserved for team-lead on `main`. Pick a slug (short-kebab-case, ≤4 words, e.g. `draft-all-toast`, `uuid-guard-slides`), then from anywhere run:
+   ```
+   git -C /Users/joseph/Desktop/pptalk worktree add /tmp/pptalk-<slug> -b <feat|fix>/<slug> main
+   cd /tmp/pptalk-<slug>
+   # symlink the git-ignored env files from the primary tree (worktrees don't carry them):
+   ln -s /Users/joseph/Desktop/pptalk/pipeline/.env pipeline/.env
+   ln -s /Users/joseph/Desktop/pptalk/web/.env.local web/.env.local
+   ```
+   Do all subsequent reads, edits, commits, and CI runs from inside that worktree. Each worktree has its own `web/node_modules` and `pipeline/.venv` — run `npm install` (in `/tmp/pptalk-<slug>/web`) and/or `uv sync` (in `/tmp/pptalk-<slug>/pipeline`) if the branch needs them to boot. **Why this matters:** every other agent on the team — peer engineers, reviewer, qa, team-lead — is reading or running code from some working tree at the same time. A `git checkout` in a shared tree silently changes files under their running command. Per-task worktrees are the only thing that prevents that race.
 3. **Implement and commit on your branch.** Use Conventional Commits: `feat: ...`, `fix: ...`, `refactor: ...`, `chore: ...`, `docs: ...`. Commit often — small, reviewable units. Squash happens at merge.
-4. **Run CI locally.** `.claude/ci/run.sh` must exit 0 before opening a PR. If it fails, fix on your branch and re-run.
+4. **Run CI locally from inside your worktree.** `cd /tmp/pptalk-<slug> && .claude/ci/run.sh` must exit 0 before opening a PR. If it fails, fix on your branch and re-run. Never run CI from the primary tree.
 5. **Open the PR.** Copy `.claude/prs/TEMPLATE.md` to `.claude/prs/PR-<next-id>.md`. The next id = `max(existing integer ids in .claude/prs/PR-*.md) + 1`; if you collide with another engineer working concurrently, re-increment. Fill in Why / What changed / Test plan / CI run (paste the last 5 lines of CI output). Set Status to `open`. Commit the PR file on your branch.
 6. **Notify team-lead.** SendMessage team-lead with the PR id, branch name, and a one-line summary. Set the task to `in_review`. Then idle until you hear back.
-7. **On review feedback (CHANGES_REQUESTED).** Address each comment by amending your branch with new commits (no force-push, no `git commit --amend` on shared commits). Update the PR file: set Status back to `open`, add an `## Author response` section under the reviewer's comments addressing each point. Re-run CI. SendMessage `reviewer` (cc team-lead) when ready for re-review.
+7. **On review feedback (CHANGES_REQUESTED).** Address each comment by amending your branch with new commits (no force-push, no `git commit --amend` on shared commits) — still inside `/tmp/pptalk-<slug>`. Update the PR file: set Status back to `open`, add an `## Author response` section under the reviewer's comments addressing each point. Re-run CI. SendMessage `reviewer` (cc team-lead) when ready for re-review.
 8. **On approval (APPROVED).** Do NOT merge yourself. Team-lead merges. Update the task to `merged` only after team-lead confirms the merge.
+9. **Clean up.** After team-lead confirms the merge, remove your worktree from the primary tree: `git -C /Users/joseph/Desktop/pptalk worktree remove /tmp/pptalk-<slug>`. If the worktree has no uncommitted changes left it removes cleanly; if it does, investigate before forcing.
 
 ## Your responsibilities
 
