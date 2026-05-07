@@ -16,11 +16,15 @@ import { toast } from 'sonner';
 
 import { PlayIcon } from '@/components/shell/icons';
 
-type Stage = 'idle' | 'uploading' | 'parsing';
+type Stage = 'idle' | 'uploading' | 'parsing' | 'worker-stalled';
 
 const ACCEPT = '.pptx,.pdf';
 const PARSE_POLL_MS = 1500;
 const PARSE_TIMEOUT_MS = 90_000;
+// If a parse_only job hasn't been claimed (status still 'queued') after this
+// long, the worker is almost certainly not running. Surface guidance and let
+// the user proceed to the editor so they aren't stuck on a spinner.
+const WORKER_STALL_MS = 30_000;
 
 function basenameNoExt(name: string): string {
   return name.replace(/\.(pptx|pdf)$/i, '').trim();
@@ -49,15 +53,36 @@ export function NewProjectForm() {
     if (f) handleFileChosen(f);
   }
 
-  async function pollUntilReady(projectId: string): Promise<void> {
-    const deadline = Date.now() + PARSE_TIMEOUT_MS;
+  type PollOutcome = 'ready' | 'worker-stalled' | 'timeout';
+
+  async function pollUntilReady(projectId: string, uploadStartedAt: number): Promise<PollOutcome> {
+    const deadline = uploadStartedAt + PARSE_TIMEOUT_MS;
     while (Date.now() < deadline) {
       try {
         const res = await fetch(`/api/projects/${projectId}`, { cache: 'no-store' });
         if (res.ok) {
-          const data = (await res.json()) as { status?: string };
+          const data = (await res.json()) as {
+            status?: string;
+            active_jobs?: Array<{
+              kind?: string;
+              status?: string;
+              created_at?: string | Date;
+            }>;
+          };
           if (data.status === 'ready' || data.status === 'rendered' || data.status === 'failed') {
-            return;
+            return 'ready';
+          }
+          // Detect a parse_only job that's been queued (un-claimed) past the
+          // worker-stall threshold — the worker isn't running.
+          const parseJob = data.active_jobs?.find((j) => j.kind === 'parse_only');
+          if (parseJob && parseJob.status === 'queued' && parseJob.created_at) {
+            const created =
+              typeof parseJob.created_at === 'string'
+                ? Date.parse(parseJob.created_at)
+                : new Date(parseJob.created_at).getTime();
+            if (Number.isFinite(created) && Date.now() - created > WORKER_STALL_MS) {
+              return 'worker-stalled';
+            }
           }
         }
       } catch {
@@ -65,6 +90,7 @@ export function NewProjectForm() {
       }
       await new Promise((r) => setTimeout(r, PARSE_POLL_MS));
     }
+    return 'timeout';
   }
 
   async function startUpload(uploadFile: File) {
@@ -97,7 +123,13 @@ export function NewProjectForm() {
     }
 
     setStage('parsing');
-    await pollUntilReady(projectId);
+    const outcome = await pollUntilReady(projectId, Date.now());
+    if (outcome === 'worker-stalled') {
+      // Worker isn't running — show guidance briefly, then let the user into
+      // the editor where the same notice persists. The job stays queued and
+      // will be picked up automatically once the worker starts.
+      setStage('worker-stalled');
+    }
     router.push(`/p/${projectId}`);
   }
 
@@ -110,7 +142,13 @@ export function NewProjectForm() {
 
   const busy = stage !== 'idle';
   const statusLabel =
-    stage === 'uploading' ? 'Uploading deck…' : stage === 'parsing' ? 'Parsing slides…' : '';
+    stage === 'uploading'
+      ? 'Uploading deck…'
+      : stage === 'parsing'
+        ? 'Parsing slides…'
+        : stage === 'worker-stalled'
+          ? 'Render worker is not running — opening editor…'
+          : '';
 
   return (
     <div className="flex w-full max-w-[560px] flex-col items-center gap-6 text-center">
