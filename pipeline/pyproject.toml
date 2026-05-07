@@ -21,9 +21,20 @@ dependencies = [
 [project.scripts]
 narrator = "narrator.cli:app"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "requests>=2.32.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["narrator"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
