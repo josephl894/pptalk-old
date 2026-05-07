@@ -43,3 +43,33 @@ imports OK
 - Locked-rules sweep clean — no `/api/render/route.ts` extension, no design-token / copy-lock / schema / auth / aspect-ratio touch, no `npm run build` introduction, no SQLite/Prisma/Redis additions. Diff is pipeline-Python only.
 
 **Verdict: APPROVED**
+
+## QA
+
+### qa @ 2026-05-07T00:18:00Z
+
+**Verdict: PASS**
+
+Smoke ran from an isolated worktree (`/tmp/pptalk-pr1`) on commit `88ea3b8` to neutralize the branch-swap race we hit on the first attempt (see "incident" note below).
+
+- Python import smoke (worktree): `from narrator import cli, parse, parse_pdf, render, render_pdf, script, tts, video, usage, db, queries, storage, pipeline_runner, worker` → `imports OK`. (TS type-check skipped — diff is pipeline-Python only and reviewer already passed CI on this commit; copying `web/node_modules` into the worktree just to re-prove TS-OK on an untouched surface is wasted I/O.)
+- 40-slide render `samples/introduction-to-prevention-effectiveness.pptx → /tmp/pptalk-pr1/out/qa-pr1.mp4`:
+  - MP4 produced: `1440x1080`, `h264 + aac`, `duration=823.24s`, `46036788 bytes`. Plays.
+  - Narrate phase wall-clock: **42.68s** for 40 slides (single batched call). For comparison: prior per-slide × NARRATE_CONCURRENCY=3 baseline reported ~2 min for 30 slides on `main`. Speedup confirmed.
+  - CLI banner: `Generating narration (batched, single call)` ✓
+  - All 40 `slide_done` narrate events emit in strict sequential order (1, 2, …, 40), as expected when events fire after a single batched call returns. Compare TTS phase events on the same run, which arrive in completion order (4, 7, 6, 3, 1, 8, …) — confirms the narrate burst is post-batched-call, not parallel-per-slide.
+  - Continuity is visible: slide 4 says "Now, let's start with Topic 1," slide 7 says "We're now on Topic 2," slide 18 says "Now, let's address Topic 4." The model can only produce these transitions because it sees the full deck — confirms the "continuous context" intuition is now actually wired up.
+- Telemetry (`pipeline/usage.csv` in worktree, fresh file for this run):
+  - Exactly **1** row with `call_type=batched_slide_scripts`: 66902 input tokens, 2680 output tokens, $0.080302, duration 42.653s, empty `slide_index`. ✓
+  - **0** rows with `call_type=slide_script` for `run_id=50f82bda-720a-474b-aaf4-f4d1a821cd65`. ✓
+  - `runs.csv`: `narrate_seconds=42.683`, `num_slides=40`, `total_cost_usd=0.277322`. Total wall-clock 106.097s.
+- >40-slide pre-flight error path verified by dry call (no token spend per team-lead's guidance — recycled the 40 PNGs from the prior render's work dir to fake 41 slides and called `generate_all_scripts` directly):
+  - Raises `RuntimeError: Batched narration would exceed Haiku 4.5 output ceiling (8192 tokens) for 41 slides; chunked-batch fallback not yet implemented.` ✓
+  - Verified via `grep -c batched_slide_scripts usage.csv` before/after = 1 → 1 (no API call made). Pre-flight check fires before `_client.messages.create()`. ✓
+- CSV writer regression check: `slide_index` lands as empty string for the batched row, distinguishable from per-slide rows. ✓
+- Non-blocking observations from this smoke (do not block merge):
+  - The reviewer's note about the unused `scripts = [scripts_by_idx[s.index] for s in slides]` line in `cli.py:125` is still present; cosmetic.
+  - The `cache_control: ephemeral` marker on `BATCH_SYSTEM_PROMPT` no-ops silently (prompt is well below the 4096-token Haiku 4.5 cache floor — see `memory/project_haiku_cache_floor.md`). Same posture as per-slide path; not a regression.
+  - Worker / `pipeline_runner.generate_scripts` is untouched, so the demo critical path (project-driven render via `render_jobs`) does NOT benefit from this batched call yet. Already tracked as task #3.
+
+**Incident note (process, not product).** First smoke attempt against the live working tree was invalidated by a branch swap mid-CLI-startup at 17:06:02 PDT (working tree flipped to `fix/voice-overlay` between my `git checkout feat/batched-narration` and the `narrator render` Python process loading `cli.py`). 38 `slide_script` rows under run_id `c914b56f...` were the smoking gun. Re-ran in `/tmp/pptalk-pr1` worktree per team-lead's guidance, which pins the working tree regardless of any other agent's checkouts. Standardizing per-agent worktrees is now task #7.
