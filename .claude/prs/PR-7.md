@@ -151,4 +151,60 @@ imports OK
 
 ## Reviews
 
-(To be filled by reviewer.)
+### reviewer @ 2026-05-07T04:10:00Z
+
+**Method:** spec-only adversarial review against `SPEC-7.md` (post all three amendments) + `hats/engineering.md` Hard rules / patterns / pitfalls + `SCOPE-DEMO.md` in/out boundary + `DOCS-STYLE.md` for the PR-file prose. No code read, no diff, no worktree exposure to product files.
+
+**Spec well-formed**
+
+- Acceptance criteria observable and unambiguous after the three amendments (AC2 `image_path → png_path`, AC2 `'completed' → 'done'`, AC3 `'pending'` → schema's queued/pending state). All three amendments are documented under `## Spec amendments` with rationale.
+- Out-of-scope tight; in-scope invariants enumerate the locked-stack rules + the postgres-js / NEXT_PUBLIC / UUID-at-the-boundary pitfalls plausibly relevant to the dispatched code path.
+- No unresolved Open questions — both questions in the spec resolved before dispatch.
+
+**Spec coverage probes**
+
+- AC1 (happy-path PDF, ≤30s, slides visible, parsing UI hidden) — defended; `## Spec coverage` traces upload → enqueue → claim → `pipeline_runner.parse_and_rasterize` → `update_project_status(status='ready')` → editor flips `parsing` to false. QA gate measured 1s end-to-end on a 3-page PDF, well under the 30s envelope.
+- AC2 (`render_jobs.status='done'`, `kind='parse_only'`, exactly N slides with idx 0..N-1, non-null `png_path` resolving via signed URL) — defended after the 2026-05-07 amendment; the 0-based-idx fix in `parse_pdf.py` is load-bearing and qa confirmed all four sub-checks pass against the amended literal text.
+- AC3 (worker-not-running visibility, ≤60s, names worker + suggests start + non-blocking, job stays queued) — defended; two surfaces (NewProjectForm 30s short-circuit, EditorShell banner derived from `parseJob.status==='queued'` + 30s elapsed). QA gate observed DOM signal in 30s, `render_jobs.status='queued'`, and `GET /p/{id}` 200 with non-trivial body indicating UI rendered. `data-testid="worker-not-available"` + `role="alert"` is consistent with the spec's "name worker / suggest start / not block UI" mandate.
+
+**Invariant defenses probed**
+
+- Locked stack — defended (no SQLite, ORM, Redis, new transport).
+- UUID-at-the-boundary (pitfall #5) — defended; existing `isUuid()` short-circuit on `getProjectForUser` retained, no new routes.
+- `parse_only` distinct from `full_render` — defended; banner detector explicitly filters `kind === 'parse_only'`.
+- Realtime via `postgres_changes` — defended; banner subscribes to nothing new, derives from `useProjectRealtime`'s `activeJobs`.
+- postgres-js singleton (pitfall #1) — defended; no new DB clients added.
+- `NEXT_PUBLIC_*` literal access (pitfall #2) — defended; no new envs touched.
+- `pptalk_uid` cookie identity — defended (unchanged).
+- Soft-delete + timestamps — defended (no new writes).
+- No time/effort estimates — confirmed across PR file, commit messages, and quoted banner copy.
+
+**Spec-amendment alignment in PR file**
+
+- AC2 defense cites the amended `'done'` literal and explicitly notes the schema-vs-original mismatch in `## Decisions and risks`.
+- AC3 defense cites the amended "queued/pending state" wording and the Realtime contract for clearance.
+- QA gate carries an explicit re-verdict block dated 2026-05-07T03:50:00Z against the amended AC2 — same evidence, re-evaluated after team-lead's commit `89102d9`. PR file is consistent with the amended spec; no residual original-wording artifacts in the load-bearing sections.
+
+**Sanity-check on engineer's flagged out-of-scope item**
+
+- `## Decisions and risks` flags an "editor server-component cookie-write race": if a user's first-ever request lands on `/p/{id}` with no prior `/new` interaction, the cookie can't be persisted from a server component. AC1's Given specifies the user uploads on `/new`, where `POST /api/projects` is a route handler that *can* set the cookie before `router.push('/p/{id}')`. AC3's "refreshes into the editor" branch presumes the user already uploaded via `/new`. Neither AC traverses the broken path. The flag is correctly out of scope for SPEC-7.
+
+**Scope-creep check**
+
+- `parse_pdf.py` 0-base — load-bearing for AC2.
+- `parse.py` 0-base — explicitly permitted by SPEC-7's Out-of-scope clause "Engineer may fix shared root causes if any surface, but the test surface is PDF-only." Engineer flagged transparently in `## Decisions and risks`. Not creep.
+- `EditorShell.tsx` banner + grid row — load-bearing for AC3.
+- `NewProjectForm.tsx` `worker-stalled` short-circuit — load-bearing for AC3.
+
+No file in `## What changed` is untraced.
+
+**CI attestation**
+
+- Engineer's `## CI run` block shows the four-line success marker (`→ TS type-check`, `→ Python import smoke`, `imports OK`, `✓ CI green`). QA gate re-ran the same baseline in the gate worktree, also green. Plausibly green; not re-verified by reviewer.
+
+**Open adversarial questions for the engineer (non-blocking)**
+
+- The 30s threshold uses `parseJob.created_at` wall-clock (server-emitted) compared against the client's `Date.now()`. If the client clock is skewed by tens of seconds, the banner could trigger early or late. Worth a one-line note in `## Decisions and risks` for future debuggers; doesn't break AC3's 60s envelope at any plausible skew.
+- QA flagged a test-mechanics fix (smokes' bootstrap from `GET /` → `GET /api/projects`) re-applied to the gate worktree; recommended backporting to `test/pdf-parse` so a future re-run carries the corrected bootstrap. Tracking note for team-lead at merge time, not a defense gap.
+
+**Verdict: APPROVED**
