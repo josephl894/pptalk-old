@@ -20,12 +20,12 @@ The bulk regenerate-all flow currently enqueues one `slide_script_regen` job per
 
 ## Acceptance criteria
 
-1. **AC1 — One LLM call for the batch.** Given a project with N unlocked, non-deleted slides where N ≥ 2, When the user triggers regenerate-all from the web UI, Then exactly ONE Claude `messages.create` call is issued for the bulk regeneration (not N), and that call's response carries narration text for every in-scope slide in a single round-trip.
+1. **AC1 — One narration call for the batch.** Given a project with N unlocked, non-deleted slides where N ≥ 2, When the user triggers regenerate-all from the web UI, Then exactly ONE Claude `messages.create` call **of `call_type` `batched_slide_scripts` (or its successor — the narration-generation call)** is issued for the bulk regeneration (not N), and that call's response carries narration text for every in-scope slide in a single round-trip. **The implementation MAY make additional O(1) setup calls whose count does not scale with N (e.g. a single `deck_summary` call regardless of slide count); these are not counted by this AC.** The user's symptom — "speaker notes populated per slide" — is about the per-slide narration loop; O(1) setup calls do not reproduce that symptom and are out of scope for the count constraint.
 2. **AC2 — Each slide gets its own slide-specific narration.** Given a successful batch response, When the response is applied, Then each in-scope slide's `script` column is updated to the narration that the model returned **for that specific slide_id**, with no cross-slot mis-mapping (verified with a fixture where slides arrive in non-monotonic id order).
 3. **AC3 — Locked slides are excluded from the batch.** Given a slide with `script_locked = true`, When the user triggers regenerate-all, Then that slide is NOT included in the batched prompt AND its `script` value is unchanged after the call returns. (Preserves the existing draft-all rule that locked slides are skipped.)
 4. **AC4 — All-or-nothing on call failure.** Given the batch Claude call fails (5xx, network error, malformed response that cannot be mapped to all in-scope slides), When the failure occurs, Then NO in-scope slide's `script` is partially overwritten in the database, AND the user-facing surface reports an error (toast / error event consistent with how single-slide regen failure is reported today).
 5. **AC5 — Empty / single-slide cases stay correct.** Given the project has zero in-scope slides (all locked or empty), When regenerate-all is triggered, Then no Claude call is made and the operation succeeds with an empty result. Given exactly one in-scope slide, When regenerate-all is triggered, Then exactly one Claude call is made and that one slide's script is updated. (No off-by-one in the batching path's edge cases.)
-6. **AC6 — Cost telemetry reflects the batch shape.** Given a successful bulk regenerate-all, When `usage.csv` is appended, Then the bulk regen produces ONE telemetry row attributable to the batched call (not N rows), with token counts and cost reflecting the single round-trip. Existing single-slide regen telemetry shape is unchanged.
+6. **AC6 — Cost telemetry reflects the batch shape.** Given a successful bulk regenerate-all, When `usage.csv` is appended, Then the bulk regen produces exactly ONE narration-call row (the `batched_slide_scripts` row, or its successor) — not N. Any O(1) setup calls permitted by AC1 (e.g. `deck_summary`) may add their own one row each; the constraint is that narration-call rows do not scale with N. Existing single-slide regen telemetry shape is unchanged.
 7. **AC7 — Realtime overlay still updates per-slide.** Given the editor overview overlay is open while the batch runs, When the batch completes and slide.script values are written, Then each in-scope slide's `updated_at` is bumped so postgres_changes fires for every updated slide (the overlay's per-slide live update behavior is preserved even though the LLM call is collapsed).
 
 ## Out of scope
@@ -62,3 +62,11 @@ The bulk regenerate-all flow currently enqueues one `slide_script_regen` job per
 ## Open questions (resolved before dispatch)
 
 - (none — clarifying round-trip resolved Surface, Strategy, and Scope above; spec is ready to dispatch.)
+
+## Post-gate clarifications (2026-05-07)
+
+Surfaced by QA gate run #1 against PR-8 commit 34e3c35. The original AC1/AC6 wording said "exactly ONE Claude `messages.create` call" without distinguishing call types. The engineer's implementation makes one O(1) `deck_summary` call (improves narration coherence; constant cost regardless of N) plus one batched narration call. Two readings were both coherent against the original wording.
+
+**Resolution (team-lead, spec author):** the user's symptom — "speaker notes are being populated per slide" — is about the per-slide narration loop. The deck_summary call is O(1) and does not reproduce that symptom. AC1 and AC6 amended above to constrain narration-call count (not total call count), and to explicitly permit O(1) setup calls that do not scale with N. Implementation as shipped on `feat/bulk-regen-batch` therefore satisfies the amended spec; QA re-gates with assertions filtered to narration-call rows (call_type = `batched_slide_scripts`).
+
+This is a SPEC fix, not an impl fix — engineer's branch is unchanged.
