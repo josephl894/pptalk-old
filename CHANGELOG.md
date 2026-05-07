@@ -2,6 +2,13 @@
 
 Append-only log of shipped work. Reverse chronological.
 
+## 2026-05-06 — Batched narration end-to-end (PR-1 + PR-3)
+- Replaced per-slide parallel `ThreadPoolExecutor` narration loop with a single batched Haiku call that returns all narrations at once, parsed via `<<<SLIDE N>>>` delimiters. Preserves true continuity (model sees full deck) and eliminates round-trip stalls.
+- Worker / `pipeline_runner.generate_scripts` migrated to the batched path with a chunked-batch fallback for >40-slide decks (chunks of 40 sequential, prior-chunk tail passed as `<previous_narration>` continuation hint for cross-chunk flow). Per-slide progress events fire after each chunk so UI fills mid-render.
+- Single-slide regen path (`worker.py` `slide_script_regen` job kind, `generate_slide_script`) intentionally preserved unchanged — still the active code for one-slide rebuilds.
+- Worker emits `narrate chunk i/N starting (slides X..Y)` log line for ops visibility on chunked runs.
+- Measured speedup on the demo flow: 38-slide deck narrate phase **47s** (was ~2 min via observed UI), 61-slide chunked path **63s** end-to-end through the worker. qa PASS on both single-chunk and chunked.
+
 ## 2026-05-06 — Voice card hotfix (PR-2)
 - Fixed broken Voice card in editor: nested play sub-button was a dead control swallowing the parent overlay-open click. Un-nested both the ScriptPanel card and the VoiceLibraryOverlay cards into sibling `<button>` elements; play sub-button now actually attempts audio (toast on 404 since sample MP3s are Phase 4 content).
 - Voice selection now persists: `PATCH /api/projects/[id]` accepts a `voice` field and bulk-updates `slides.voice` for the project (zod enum-validated against the six locked codenames; sample-project 403 gate intact). EditorShell PATCHes on commit and resolves initial voice from existing slides on reload.
