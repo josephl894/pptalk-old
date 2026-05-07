@@ -1,6 +1,6 @@
 # SPEC-8: Batch bulk regenerate-all into a single LLM call
 Author: team-lead
-Status: draft
+Status: merged
 Linked PR: PR-8
 Linked impl branch: feat/bulk-regen-batch
 Linked test branch: test/bulk-regen-batch
