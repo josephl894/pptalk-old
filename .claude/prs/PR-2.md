@@ -93,3 +93,45 @@ Two non-blocking follow-ups worth tracking separately:
 1. Wrap the slides+projects bulk update in `db.transaction(...)` for atomicity.
 2. Guard `playSample` against double-toast on 404 (or extract a single helper).
 
+## QA
+
+### qa @ 2026-05-07T00:24:00Z
+
+**Verdict: PASS-WITH-CAVEAT** (API + persistence + SSR markup all green; visual/audio/double-toast checks deferred to a human pass — qa is a CLI agent, can't drive Chrome).
+
+Smoke ran from a detached worktree at `/tmp/pptalk-pr2` pinned to commit `936c528` to neutralize branch-swap races (PR-1 incident on first attempt). API + SSR probes ran against the live dev server on `:3000` during a 1-minute window where the main worktree was on `fix/voice-overlay` — i.e., disk source had PR-2's code. Cross-checked at end-of-smoke via SSR HTML inspection (unnested `<div class="pp-card">` with two sibling `<button>` elements present) and via a control PATCH after the post-test branch swap (which 400'd, confirming the dev server had been serving PR-2 code during my tests and only reverted afterward).
+
+**API contract — PASS (all five paths)**
+- `PATCH /api/projects/<non-sample-id>` body `{"voice":"shimmer"}` → **200**. Response is `{project: {...}}` with `updated_at` bumped. Direct DB query confirms all 45 non-deleted slides on the project flipped to `voice='shimmer'`. ✓
+- `PATCH ... {"voice":"bogus"}` → **400** `{"error":"Invalid input"}` (zod enum guard). ✓
+- `PATCH ... {}` → **400** `{"error":"Provide at least one of: name, voice, deleted"}` (zod refine includes the new `voice` field in its message). ✓
+- `PATCH /api/projects/<sample-id>` → **403** `{"error":"Samples are read-only"}`. Sample read-only gate intact for the new voice path. ✓
+- `PATCH ... {"voice":"nova"}` then GET → all 45 slides at `nova`; `EditorShell.initialVoice = initialSlides.find(s => s.voice)?.voice ?? DEFAULT_VOICE` resolves to `nova`. **Persistence end-to-end verified.** ✓
+
+**SSR markup — PASS**
+- `GET /p/<id>` → **200**, 156KB HTML, no SSR crash.
+- Voice card SSR shape confirmed: `<div class="pp-card flex items-center gap-2.5 p-3 ...">` containing `<button type="button" aria-label="Open voice library" ...>` (with the avatar + voice name) and a sibling `<button type="button" aria-label="Play sample" ...>` (with the play SVG icon). Two real interactive `<button>` elements, no nested role=button. The unnest fix ships.
+- Voice name "Nova" rendered in the SSR HTML at the time of the persistence test — confirms the API-set voice flows through the React server-component path on reload, not just client state.
+- Connection pool: 6 (under 10 max). UUID guard regression `/p/non-existent`, `/p/abc123`, `/p/<valid-shape-DNE-uuid>` all return 307 (redirect to home). No regressions on the boundary checks listed in `hats/engineering.md`.
+
+**Client bundle — PASS**
+- Toast string `"Voice sample not available"` ships in `web/.next/server/app/p/[id]/page.js` AND `web/.next/static/chunks/app/p/[id]/page.js`. The toast handler is in the live bundle.
+- All 6 `/voices/<codename>.mp3` URLs return **404** (sample MP3s aren't shipped yet — Phase 4 content task). So `playSample`/`previewVoice` will hit the 404 path on every click; the toast strategy is the active path, not a degenerate fallback.
+
+**What I cannot verify (CLI agent, no browser) — needs human eyeballs before merge if these matter**
+- Clicking the Voice card actually opens the overlay (vs the markup just rendering hidden). Static analysis of `setVoiceOpen(true)` looks correct; behavior is React state-driven and only observable in a real DOM.
+- Clicking the play sub-button actually fires the toast UI in the browser (vs the handler being shadowed or not bound).
+- Group filter (All / Authoritative / Warm / Narrative / Energetic / Neutral) actually filters the visible grid. Logic is in client component state; would need a click + DOM mutation observation.
+- `aria-pressed={selected}` flips visually + correctly when clicking a voice card.
+- **Reviewer's double-toast smell.** On 404, BOTH `audio.onerror` AND `audio.play().catch(...)` fire the same toast call in `playSample` (and similarly in `previewVoice`). Sonner deduplicates identical toasts within a short window, so users typically see one — but the double-fire isn't statically observable in the bundle. A real-browser pass should confirm only one toast lands per click. Reviewer flagged this as non-blocking and tracked as task #5; a human browser smoke would close it definitively.
+- Closing the overlay returns the new selection to the editor (overlay → ScriptPanel state → EditorShell PATCH → DB).
+- The `playSample` Audio element doesn't null-out `sampleAudioRef.current` on component unmount — minor leak, GC reclaims, reviewer flagged as non-blocking.
+
+**Locked-rules sweep — clean (re-confirmed)**
+- No `/api/render/route.ts` (singular) extension. No design-token diffs (paper/ink/accent ramps unchanged on this branch). No locked-copy collisions (the new toast strings don't touch "Draft all narrations", "Draft this", "Draft this slide"). No SQLite/Prisma/Redis additions; no `npm run build` introduction. No schema/migration diff. Auth posture preserved. Aspect-ratio path untouched. No time estimates.
+
+**Process incident note (second occurrence — context for the standardize-worktrees follow-up).** Second branch-swap collision in this session. While my detached worktree at `/tmp/pptalk-pr2` was stable, the **main worktree** that the live dev server reads from was swapped from `fix/voice-overlay` → `main` → `feat/batched-narration-worker` at 17:22:38-58 PDT, immediately after my API tests completed at 17:21:48. The PR-2 code that the dev server was serving during my tests (verified post-hoc by SSR HTML shape and by a control PATCH that 400'd post-swap) is now no longer on disk in the main worktree. Tests valid; race still real. Worktree isolation protects the WORKING TREE I read for static analysis but does NOT protect the live dev server, which is necessarily shared. Resolution options are tracked in task #7; for this PR, the verdict is unaffected.
+
+**Recommendation**: PR-2 is mergeable on the basis of API + persistence + SSR markup all green. If you want the visual + double-toast checks closed before merging, request a human browser pass — they'll need to (a) click the Voice card, (b) click the play sub-button, (c) confirm one toast (not two) appears, (d) reload the page and confirm the picked voice still shows in the card. Five-minute pass. If the demo bar accepts the headless evidence as sufficient, merge as-is.
+
+DB side-effect from this smoke: project `019dfcc4-0c90-7490-b393-07a38b95829e` ("Wave 3 empty smoke") slides are now at `voice=nova` instead of the prior `null`. Not restored — it's not a sample, the user can re-pick, and the local dev DB is non-production. Flag if you want me to NULL it back.
