@@ -129,6 +129,26 @@ imports OK
 
 **For team-lead:** AC1 and AC3 fully pass. AC2 fails only on the spec's literal `'completed'` vs the schema's `'done'`. This is the same shape as the `pending`/`queued` amendment already accepted in commit `7891dc3`. Recommended path: amend SPEC-7 AC2 to accept `'done'` (schema enum) as the spec's "completed" semantic, then re-gate trivially without engineer rework — every other AC2 sub-check already passes against the engineer's branch. If you decline the amendment, route to engineer and the rework would touch the project-wide `render_jobs.status` enum + worker + queries + Realtime subscribers (engineer flagged this scope in `## Decisions and risks`).
 
+### qa @ 2026-05-07T03:50:00Z — re-verdict against amended spec
+
+**Trigger:** team-lead accepted the AC2 amendment in commit `89102d9` on `main` — AC2 now reads `status='done'` to match the actual schema enum. Same drafting-error shape as the prior `image_path → png_path` and `pending → queued/pending` amendments.
+
+**No re-run needed.** The original gate run already captured the observed value. Re-evaluating the same evidence against the amended AC2:
+
+- AC2 (amended: `render_jobs.status='done'` AND `kind='parse_only'`; slides count == N; idx 0..N-1; `png_path` non-null; signed URL HEAD 200) — **PASS**:
+  - `render_jobs.kind='parse_only'` AND `status='done'` ✓ (matches the amended literal)
+  - slides row count = 3 ✓
+  - slides idx values = 0,1,2 ✓
+  - every slide row has non-null `png_path` ✓
+  - all three `png_path` values resolved with HTTP 200 on the signed HEAD ✓
+
+- AC1 — PASS (unchanged from initial run).
+- AC3 — PASS (unchanged from initial run).
+
+**Verdict: PASS** (overall — all three ACs satisfy the amended spec)
+
+**For team-lead:** ready for reviewer.
+
 ## Reviews
 
 (To be filled by reviewer.)
