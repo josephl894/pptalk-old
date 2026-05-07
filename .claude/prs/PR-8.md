@@ -72,7 +72,53 @@ imports OK
 ```
 
 ## QA gate
-<!-- filled by qa -->
+
+### qa @ 2026-05-07T05:13:00Z
+
+**Gate worktree:** `/tmp/pptalk-qa-gate-8` (created off `feat/bulk-regen-batch` HEAD `4a7cf8c`, merged `test/bulk-regen-batch` after three test-infra fix commits — see notes below).
+
+**Test infrastructure fixes applied on `test/bulk-regen-batch` during the gate run** (all on the test branch, no product code touched):
+1. Cookie auth — fixture's `users.browser_id` now matches the `pptalk_uid` cookie value (was id-vs-browser_id mismatch causing the route to mint new users and 404).
+2. HTTP status — accept both 200 and 202 from `POST /api/projects/[id]/draft-all` (route returns 202 Accepted for async enqueue; spec doesn't pin the code).
+3. Storage bytes — fixture now uploads a 67-byte placeholder PNG to each slide's `png_path` so the worker's storage download succeeds (Claude is still mocked).
+
+**Test results**
+
+- AC1 (One LLM call for the batch — N ≥ 2 unlocked slides → exactly 1 `messages.create`) — **FAIL**: observed 2 Claude calls per bulk regen. Worker handler in `worker.py:680-692` calls `summarize_deck(full_deck_objs)` (one `messages.create`) before `pipeline_runner.generate_scripts(... summary, log=_log)` (a second `messages.create` via `generate_all_scripts_chunked` for ≤ 40 slides). Test fixture: 5 unlocked slides; assertion `mock_anthropic.call_count == 1`; got 2.
+- AC2 (per-slide narration mapping; non-monotonic ids) — **PASS**: with slides inserted in idx order [3, 1, 2] and a mocked response keyed by idx, each slide's stored `script` matches the narration returned under its own idx. No cross-slot leak; mapping is by idx, not list position.
+- AC3 (locked slides excluded from the batch) — **FAIL**: same root cause as AC1. The locked-slide assertions (locked body not in payload, locked script unchanged, unlocked slides updated) all PASS in isolation, but the test's first assertion `mock_anthropic.call_count == 1` fails first (got 2) because of the deck-summary call.
+- AC4 case (a) (Anthropic raises 5xx → no DB mutation, error surfaced) — **PASS**: with `mock_anthropic.side_effect = RuntimeError("simulated 5xx")`, all three slides retain their pre-call (NULL) script and the worker job ends in `failed` status.
+- AC4 case (b) (response missing one requested idx → no partial write) — **PASS**: with the mock returning narration only for idx 1 and 3 (idx 2 missing), all three slides retain their pre-call script values. `_parse_batched_response` raises before any DB write; no partial mutation.
+- AC5 case 1 (zero in-scope → 0 Claude calls) — **PASS**: project with all slides locked; route short-circuits to `{job_ids: [], slide_ids: []}`; worker is never invoked; `mock_anthropic.call_count == 0`.
+- AC5 case 2 (single in-scope → exactly 1 Claude call) — **FAIL**: same root cause as AC1. With one unlocked slide between two locked siblings, the bulk regen issues 2 calls (deck_summary + batched_slide_scripts) instead of 1. Locked siblings are correctly preserved; the only-unlocked slide does receive its expected narration.
+- AC6 (usage.csv telemetry — exactly 1 row per batch) — **FAIL**: same root cause as AC1. Window inspection shows 2 anthropic rows tagged `call_type=deck_summary` and `call_type=batched_slide_scripts` for a 5-slide bulk regen, not 1.
+- AC7 (per-slide `updated_at` bumped → Realtime fires) — **PASS**: every in-scope slide's `updated_at` is greater after the batch than before. The worker writes scripts via N individual `set_slide_script` UPDATEs in one transaction (per PR-8 line 51), each bumping `updated_at` on its row.
+
+**CI baseline:** `.claude/ci/run.sh` → green
+```
+→ TS type-check (web)
+→ Python import smoke (pipeline)
+imports OK
+✓ CI green
+```
+
+**Verdict: FAIL**
+
+**Spec / impl ambiguity flagged for team-lead.** The four failing ACs (AC1, AC3, AC5-single, AC6) all fail with the same observable: **2 `messages.create` calls per bulk regen, not 1**. The second call comes from `summarize_deck(full_deck_objs)` in the worker's `_do_project_script_regen` handler (`worker.py:680-692`), which is called *before* the batched narration call.
+
+Two readings of AC1 ("Then exactly ONE Claude `messages.create` call is issued for the bulk regeneration"):
+- **Strict** — exactly one `messages.create` call, total. The summary must be embedded inline in the batched call (or skipped) to satisfy this. Under this reading, AC1 / AC3 / AC5-single / AC6 → FAIL.
+- **Pragmatic** — one *narration* call (replacing the prior N per-slide narration calls), with setup calls (deck summary) implicitly out of scope. Under this reading, AC1 / AC3 / AC5-single / AC6 → PASS.
+
+The spec's wording explicitly names `Claude messages.create call` and uses "exactly ONE", which favors the strict reading. PR-8.md line 18 also frames it as one `_client.messages.create` call. AC6's "ONE telemetry row" reinforces strict (since each `messages.create` writes one usage row, and the engineer's `summarize_deck` writes a `deck_summary` row separately).
+
+**Recommended team-lead routing:**
+- If strict reading is intended → route back to engineer; the summary call must move into the batched prompt (or be skipped — `summarize_deck` is small, embedded inline costs little) so AC6 lands at one telemetry row and AC1/AC3/AC5-single at one `messages.create`.
+- If pragmatic reading is intended → amend SPEC-8 AC1 / AC6 to clarify ("exactly one *narration* call" / "one *batched-narration* row, plus any setup calls"), QA loosens the assertion to ignore `call_type=deck_summary` rows, then re-gate.
+
+This is a spec ambiguity, not an impl bug per se — both readings are coherent. Flagging rather than picking a side.
+
+**For team-lead:** route back to engineer (or amend spec) for the summarize_deck question. AC2, AC4 (both cases), AC5-zero, AC7 are clean PASSes — those won't need rework regardless of the AC1 resolution.
 
 ## Reviews
 <!-- filled by reviewer -->
