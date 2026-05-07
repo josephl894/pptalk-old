@@ -39,6 +39,30 @@ export function ScriptPanel({
   const slideId = slide?.id ?? null;
   const [regenInFlight, setRegenInFlight] = React.useState(false);
   const [voiceOpen, setVoiceOpen] = React.useState(false);
+  const sampleAudioRef = React.useRef<HTMLAudioElement | null>(null);
+
+  function playSample(codename: string) {
+    // Stop any prior sample so successive clicks don't stack.
+    if (sampleAudioRef.current) {
+      try {
+        sampleAudioRef.current.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    const a = new Audio(`/voices/${codename}.mp3`);
+    sampleAudioRef.current = a;
+    a.onerror = () => {
+      toast('Voice sample not available yet', {
+        description: 'Open the Voice library to pick a voice.',
+      });
+    };
+    a.play().catch(() => {
+      toast('Voice sample not available yet', {
+        description: 'Open the Voice library to pick a voice.',
+      });
+    });
+  }
 
   // Track the script value at the moment we kicked off regen, so we can
   // detect "regen finished" via the parent's realtime-driven `slide.script`
@@ -90,35 +114,40 @@ export function ScriptPanel({
             Change
           </button>
         </div>
-        <button
-          type="button"
-          onClick={() => setVoiceOpen(true)}
-          className="pp-card flex items-center gap-2.5 p-3 text-left transition-shadow duration-150 ease-out hover:shadow-floater"
-        >
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white"
-            style={{
-              background: 'linear-gradient(135deg, var(--accent-soft), var(--accent))',
-            }}
+        {/* Two sibling controls instead of nesting a play button inside the
+            card-open button — nested interactive content was swallowing the
+            inner click and producing the "voice button doesn't work" feel. */}
+        <div className="pp-card flex items-center gap-2.5 p-3 transition-shadow duration-150 ease-out hover:shadow-floater">
+          <button
+            type="button"
+            onClick={() => setVoiceOpen(true)}
+            aria-label="Open voice library"
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
           >
-            {voiceLabel(voice)[0]}
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col leading-tight">
-            <span className="t-13 truncate font-medium">{voiceLabel(voice)}</span>
-            <span className="t-12 truncate text-[color:var(--ink-3)]">
-              Applied at render time
-            </span>
-          </div>
-          <span
-            role="button"
-            tabIndex={-1}
+            <div
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white"
+              style={{
+                background: 'linear-gradient(135deg, var(--accent-soft), var(--accent))',
+              }}
+            >
+              {voiceLabel(voice)[0]}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col leading-tight">
+              <span className="t-13 truncate font-medium">{voiceLabel(voice)}</span>
+              <span className="t-12 truncate text-[color:var(--ink-3)]">
+                Applied at render time
+              </span>
+            </div>
+          </button>
+          <button
+            type="button"
             aria-label="Play sample"
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => playSample(voice)}
             className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[color:var(--hairline-2)] text-[color:var(--ink-2)] hover:bg-[color:var(--paper-2)]"
           >
             <PlayIcon size={10} />
-          </span>
-        </button>
+          </button>
+        </div>
       </section>
 
       {/* 2. Slide settings card */}

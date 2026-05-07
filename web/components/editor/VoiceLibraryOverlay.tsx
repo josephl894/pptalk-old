@@ -17,6 +17,7 @@
  */
 
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import {
   Dialog,
@@ -93,9 +94,19 @@ export function VoiceLibraryOverlay({
     const a = new Audio(`/voices/${codename}.mp3`);
     audioRef.current = a;
     a.onended = () => setPreviewing((p) => (p === codename ? null : p));
-    a.onerror = () => setPreviewing((p) => (p === codename ? null : p));
+    a.onerror = () => {
+      setPreviewing((p) => (p === codename ? null : p));
+      toast('Voice sample not available yet', {
+        description: 'Selection still applies on render.',
+      });
+    };
     setPreviewing(codename);
-    a.play().catch(() => setPreviewing((p) => (p === codename ? null : p)));
+    a.play().catch(() => {
+      setPreviewing((p) => (p === codename ? null : p));
+      toast('Voice sample not available yet', {
+        description: 'Selection still applies on render.',
+      });
+    });
   }
 
   React.useEffect(() => {
@@ -175,12 +186,15 @@ export function VoiceLibraryOverlay({
                   const selected = tentative === v.codename;
                   const isPreview = previewing === v.codename;
                   return (
-                    <button
+                    // Card is a div with a select button + a sibling preview
+                    // button. Nesting the preview inside the select button
+                    // (the prior shape) created an interactive-in-interactive
+                    // markup that swallowed the inner click handler in some
+                    // browsers — symptom: "the play button does nothing."
+                    <div
                       key={v.codename}
-                      type="button"
-                      onClick={() => setTentative(v.codename)}
                       className={cn(
-                        'pp-card flex flex-col gap-3 p-3.5 text-left transition-shadow duration-150 ease-out hover:shadow-floater',
+                        'pp-card flex flex-col gap-3 p-3.5 transition-shadow duration-150 ease-out hover:shadow-floater',
                       )}
                       style={
                         selected
@@ -191,48 +205,50 @@ export function VoiceLibraryOverlay({
                             }
                           : undefined
                       }
-                      aria-pressed={selected}
                     >
                       <div className="flex items-center gap-2.5">
-                        <div
-                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold"
-                          style={{
-                            background: selected
-                              ? 'linear-gradient(135deg, var(--accent-soft), var(--accent))'
-                              : 'var(--paper-3)',
-                            color: selected ? '#fff' : 'var(--ink-2)',
-                          }}
+                        <button
+                          type="button"
+                          onClick={() => setTentative(v.codename)}
+                          aria-pressed={selected}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                         >
-                          {v.name[0]}
-                        </div>
-                        <div className="flex min-w-0 flex-1 flex-col leading-tight">
-                          <div className="flex items-center gap-1.5">
-                            <span className="t-14 truncate font-medium">{v.name}</span>
-                            {selected && (
-                              <span className="pp-tag is-coral text-[10px]" style={{ height: 16, padding: '0 5px' }}>
-                                In use
-                              </span>
-                            )}
+                          <div
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold"
+                            style={{
+                              background: selected
+                                ? 'linear-gradient(135deg, var(--accent-soft), var(--accent))'
+                                : 'var(--paper-3)',
+                              color: selected ? '#fff' : 'var(--ink-2)',
+                            }}
+                          >
+                            {v.name[0]}
                           </div>
-                          <div className="t-12 truncate text-[color:var(--ink-3)]">
-                            {v.subtitle}
+                          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+                            <div className="flex items-center gap-1.5">
+                              <span className="t-14 truncate font-medium">{v.name}</span>
+                              {selected && (
+                                <span className="pp-tag is-coral text-[10px]" style={{ height: 16, padding: '0 5px' }}>
+                                  In use
+                                </span>
+                              )}
+                            </div>
+                            <div className="t-12 truncate text-[color:var(--ink-3)]">
+                              {v.subtitle}
+                            </div>
                           </div>
-                        </div>
-                        <span
-                          role="button"
-                          tabIndex={-1}
+                        </button>
+                        <button
+                          type="button"
                           aria-label={`Preview ${v.name}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            previewVoice(v.codename);
-                          }}
+                          onClick={() => previewVoice(v.codename)}
                           className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[color:var(--hairline-2)] bg-[color:var(--paper)] text-[color:var(--ink-2)] hover:bg-[color:var(--paper-2)]"
                         >
                           <PlayIcon size={10} />
-                        </span>
+                        </button>
                       </div>
                       <Waveform active={selected || isPreview} seed={v.codename} />
-                    </button>
+                    </div>
                   );
                 })}
               </div>
