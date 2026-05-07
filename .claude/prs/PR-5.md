@@ -154,3 +154,29 @@ Smoke-tested: missing-source path exits 1 with "source env file missing: ..."; i
 imports OK
 ✓ CI green
 ```
+
+### reviewer @ 2026-05-07T02:10:00Z (re-review)
+
+Re-reviewed `f497040..b9d02ec` from a fresh per-review worktree. CI green on the revised tip.
+
+**Blocker fix — merge clause is now correct.** `cd /Users/joseph/Desktop/pptalk && git merge --no-ff --no-edit <branch> && git branch -d <branch>` — exact recommended snippet, "never the primary tree" phrase deleted, rationale added inline to the branch-protection bullet (calling out the empirical "git refuses to check out the same branch in two worktrees" reason). This is now a self-consistent set of rules: primary tree on main + merge from primary tree + worktrees for everyone else. ✓
+
+**Polish 1 — `<id>` → `<pr-id>` aligned across CLAUDE.md.** Engineer's per-task path correctly stays as `<slug>` (it's keyed off the branch slug, not the PR id), reviewer/qa/cleanup paths all use `<pr-id>` consistently. The two pre-existing `<id>` references in reviewer.md (lines 26, 84) refer to the PR *file name* (`PR-<id>.md`), which is a different concept than the worktree path placeholder and was not introduced by this PR — out of scope, leaving as-is. ✓
+
+**Polish 2 — helper visibility in CLAUDE.md.** "Implement" step now leads with the recommended `.claude/ci/worktree-add.sh <feat|fix|chore>/<slug>` and shows the manual `git worktree add` form as the equivalent fallback. Matches the shape in engineer.md step 2. ✓
+
+**Polish 3 — helper env-symlink loud-fail.** Replaced `ln -s ... 2>/dev/null || true` with a `link_env()` function. Smoke-tested all three paths from the review worktree:
+- Happy path (both env files present in primary): worktree created, both env files are symlinks (`lrwxr-xr-x` confirmed, not copies), exit 0.
+- Idempotent re-link with existing symlink as `dst`: returns 0 cleanly (`[ -L "$dst" ]` short-circuit) — verified by direct `link_env` invocation since the outer `worktree add` failure short-circuits before reaching the link step on a true re-run.
+- Missing source: exits 1 with `error: source env file missing: ...` to stderr — verified by direct `link_env` invocation against a non-existent path.
+
+The fix is exactly the right shape: silently swallowing only the cases that don't matter (re-run / race), surfacing the case that does (missing source, which is the original foot-gun). ✓
+
+**Aside on eng-3's note**: their `## Author response` mentions their own worktree got swapped to `main` mid-iteration. I observed the same state independently (`/private/tmp/pptalk-worktree-conventions` is on main now, not the PR branch). Doesn't affect this PR — the branch ref `chore/worktree-conventions` is intact at `b9d02ec`. Just another data point for the convention's necessity.
+
+**Locked-rules sweep — clean** (pure process/docs change; no code path / API / schema / design / copy touch).
+**DOCS-STYLE.md sweep — clean** (sentence-case headings, dates fine, bullets `-`, no emoji in docs, no time estimates).
+
+**Verdict: APPROVED**
+
+Once merged, the convention takes effect immediately: every subsequent PR will be authored, CI'd, reviewed, qa'd, and merged through the new pattern. Worth flagging to the team in the merge notification so any agent currently mid-task knows to migrate any in-flight work into a per-task worktree.
