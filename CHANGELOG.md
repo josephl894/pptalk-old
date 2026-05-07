@@ -2,6 +2,12 @@
 
 Append-only log of shipped work. Reverse chronological.
 
+## 2026-05-07 — PDF upload no longer stuck on "parsing" (PR-7)
+- Fixed two issues that surfaced when a PDF was uploaded on `/new` with the worker not running: (a) `/new` short-circuits its 90s poll and routes to the editor as soon as a parse stall is detected, instead of spinning forever; (b) `EditorShell` renders a non-blocking banner (`role="alert"`, `data-testid="worker-not-available"`) when a `parse_only` job has been queued >30s, naming the worker process and giving the start command. Job stays `queued` so a started worker still picks it up.
+- Triage finding: the dominant root cause for the symptom was that the user's local Python worker (`uv run narrator worker`) wasn't running — the demo flow assumed it. The new visibility surface makes that obvious instead of silent.
+- Bonus correctness fix: both `parse.py` (PPTX) and `parse_pdf.py` (PDF) used `enumerate(..., start=1)` for slide indices, but the schema, reorder route, and editor display all assume 0-based `idx`. Now 0-based for both formats.
+- SPEC-7 went through three drafting amendments mid-flight (`image_path`→`png_path`, `pending`→`queued`, `completed`→`done`) — all schema/enum mismatches in the spec, none impl bugs. Workflow lesson: reference the schema while authoring specs, not from memory.
+
 ## 2026-05-06 — Voice samples shipped (PR-6)
 - Voice card play button now produces actual audio. Six sample MP3s (one per OpenAI voice: alloy, echo, fable, nova, onyx, shimmer) live in a public-read `voice-samples` Supabase Storage bucket and are fetched client-side via `${NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/voice-samples/<codename>.mp3`.
 - Generator at `pipeline/scripts/generate_voice_samples.py` is idempotent (bucket creation handles already-exists; uploads use upsert). Total cost to regenerate all 6 samples: ~$0.004.

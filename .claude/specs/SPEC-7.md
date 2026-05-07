@@ -1,6 +1,6 @@
 # SPEC-7: PDF upload from /new must not get stuck on "parsing"
 Author: team-lead
-Status: dispatched
+Status: merged
 Linked PR: PR-7
 Linked impl branch: fix/pdf-parse
 Linked test branch: test/pdf-parse
