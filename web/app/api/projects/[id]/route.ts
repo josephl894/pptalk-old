@@ -118,14 +118,21 @@ export async function GET(
 // PATCH /api/projects/[id]
 // ---------------------------------------------------------------------------
 
+// Project-wide voice. Stored on each `slides` row (no `projects.voice` column);
+// every slide gets the same value because per-slide voice override is out of
+// scope per Wave 2 lock.
+const VOICE_CODENAMES = ['onyx', 'echo', 'fable', 'shimmer', 'nova', 'alloy'] as const;
+
 const PatchBody = z
   .object({
     name: z.string().min(1).max(200).optional(),
+    voice: z.enum(VOICE_CODENAMES).optional(),
     deleted: z.literal(true).optional(),
   })
-  .refine((v) => v.name !== undefined || v.deleted === true, {
-    message: 'Provide at least one of: name, deleted',
-  });
+  .refine(
+    (v) => v.name !== undefined || v.voice !== undefined || v.deleted === true,
+    { message: 'Provide at least one of: name, voice, deleted' },
+  );
 
 export async function PATCH(
   req: NextRequest,
@@ -170,6 +177,15 @@ export async function PATCH(
 
     const setClause: Record<string, unknown> = { updatedAt: new Date() };
     if (parsed.data.name !== undefined) setClause.name = parsed.data.name;
+
+    if (parsed.data.voice !== undefined) {
+      // Bulk-write voice to every non-deleted slide so a reload (which derives
+      // the editor's initial voice from `slides.voice`) gets the latest pick.
+      await db
+        .update(slides)
+        .set({ voice: parsed.data.voice, updatedAt: new Date() })
+        .where(and(eq(slides.projectId, id), isNull(slides.deletedAt)));
+    }
 
     const updated = await db
       .update(projects)

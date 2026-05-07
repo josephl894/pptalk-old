@@ -90,6 +90,33 @@ export function EditorShell({
   }, [initialSlides]);
   const [voice, setVoice] = React.useState<string>(initialVoice);
 
+  // Persist voice on every change. The schema stores voice per-slide (no
+  // `projects.voice` column), so the API bulk-writes to all `slides.voice`
+  // rows. Voice is derived from the first slide on next page load.
+  const handleVoiceChange = React.useCallback(
+    (next: string) => {
+      const previous = voice;
+      if (next === previous) return;
+      setVoice(next);
+      void (async () => {
+        try {
+          const res = await fetch(`/api/projects/${project.id}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ voice: next }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (e) {
+          setVoice(previous);
+          toast.error('Voice change failed', {
+            description: e instanceof Error ? e.message : 'Try again.',
+          });
+        }
+      })();
+    },
+    [voice, project.id],
+  );
+
   const [autoSave, setAutoSave] = React.useState<AutoSaveState>('idle');
 
   const [renaming, setRenaming] = React.useState(false);
@@ -479,7 +506,7 @@ export function EditorShell({
       <ScriptPanel
         slide={selectedSlide}
         voice={voice}
-        onVoiceChange={setVoice}
+        onVoiceChange={handleVoiceChange}
         onOpenExport={() => setExportOpen(true)}
         rendering={rendering}
       />
