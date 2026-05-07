@@ -1,10 +1,8 @@
 {
   "team_name": "pptalk",
-  "description": "PPTalk-US dev team. Lead orchestrates and merges; eng-1/2/3 implement on branches via PRs; reviewer reviews diffs; qa runs regression smokes. Rehydrate on every fresh session by reading this manifest and spawning each member with a bootstrap pointer (per CLAUDE.md).",
+  "description": "PPTalk-US dev team running spec-driven, blind-parallel-verification SDLC. Team-lead (main context) authors specs at .claude/specs/SPEC-<id>.md from user requests, asking clarifying questions when ambiguous. Engineer (eng-1) and qa work in parallel from the same spec — engineer implements on feat/<slug>, qa writes spec-derived tests on test/<slug>, neither sees the other's branch until the QA gate. Qa runs tests against engineer's branch at gate-time and appends a PASS/FAIL report to the PR file. Reviewer is adversarial and spec-only — reads spec + PR file, never the code. Team-lead is the only merger. Rehydrate on every fresh session by reading this manifest and spawning each non-lead member with a bootstrap pointer (per CLAUDE.md). Full role definitions in .claude/team/<role>.md.",
   "members": [
     { "name": "eng-1",    "subagent_type": "general-purpose", "briefing_path": ".claude/team/engineer.md" },
-    { "name": "eng-2",    "subagent_type": "general-purpose", "briefing_path": ".claude/team/engineer.md" },
-    { "name": "eng-3",    "subagent_type": "general-purpose", "briefing_path": ".claude/team/engineer.md" },
     { "name": "reviewer", "subagent_type": "general-purpose", "briefing_path": ".claude/team/reviewer.md" },
     { "name": "qa",       "subagent_type": "general-purpose", "briefing_path": ".claude/team/qa.md" }
   ]
