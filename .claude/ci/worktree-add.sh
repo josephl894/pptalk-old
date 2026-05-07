@@ -54,8 +54,23 @@ fi
 git -C "$PRIMARY_TREE" worktree add "$WORKTREE" -b "$BRANCH" "$BASE"
 
 # Symlink env files from the primary tree (git-ignored, won't carry over).
-ln -s "$PRIMARY_TREE/pipeline/.env"     "$WORKTREE/pipeline/.env"     2>/dev/null || true
-ln -s "$PRIMARY_TREE/web/.env.local"    "$WORKTREE/web/.env.local"    2>/dev/null || true
+# Fail loudly if the source file is missing — silently skipping would just
+# defer the error to CI, where it surfaces as `ANTHROPIC_API_KEY is not set`.
+# A pre-existing target in the new worktree is fine (re-run / racy creation).
+link_env() {
+  local src="$1" dst="$2"
+  if [ ! -e "$src" ]; then
+    echo "error: source env file missing: $src" >&2
+    echo "       restore it in the primary tree before running this helper." >&2
+    exit 1
+  fi
+  if [ -e "$dst" ] || [ -L "$dst" ]; then
+    return 0
+  fi
+  ln -s "$src" "$dst"
+}
+link_env "$PRIMARY_TREE/pipeline/.env"  "$WORKTREE/pipeline/.env"
+link_env "$PRIMARY_TREE/web/.env.local" "$WORKTREE/web/.env.local"
 
 echo
 echo "✓ Worktree ready: $WORKTREE  (branch $BRANCH off $BASE)"
