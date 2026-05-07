@@ -43,8 +43,8 @@ PROJECT_ID="${1:-}"
 if [ -z "$PROJECT_ID" ]; then
   JAR="$(mktemp /tmp/pptalk-spec7-ac2.cookies.XXXXXX)"
   trap 'rm -f "$JAR"' EXIT
-  curl -s -c "$JAR" -b "$JAR" -o /dev/null "$HOST/" || {
-    echo "FAIL: cannot reach $HOST/" >&2; exit 1; }
+  curl -s -c "$JAR" -b "$JAR" -o /dev/null "$HOST/api/projects" || {
+    echo "FAIL: cannot reach $HOST/api/projects" >&2; exit 1; }
   UPLOAD_RESP="$(curl -s -b "$JAR" -c "$JAR" \
     -F "file=@${FIXTURE};type=application/pdf" \
     -F "name=spec-7-ac2" \

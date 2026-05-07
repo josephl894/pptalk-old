@@ -35,14 +35,16 @@ fi
 JAR="$(mktemp /tmp/pptalk-spec7-ac1.cookies.XXXXXX)"
 trap 'rm -f "$JAR"' EXIT
 
-# Bootstrap the anonymous identity by hitting the home page (server sets cookie).
-curl -s -c "$JAR" -b "$JAR" -o /dev/null "$HOST/" || {
-  echo "FAIL: cannot reach $HOST/ — is the dev server running on :3001?" >&2
+# Bootstrap the anonymous identity. The pptalk_uid cookie is minted by the
+# /api/projects routes (not the home page render path), so a quick GET there
+# gives us a fresh cookie before the upload.
+curl -s -c "$JAR" -b "$JAR" -o /dev/null "$HOST/api/projects" || {
+  echo "FAIL: cannot reach $HOST/api/projects — is the dev server running on :3001?" >&2
   exit 1
 }
 
 if ! grep -q "pptalk_uid" "$JAR"; then
-  echo "FAIL: pptalk_uid cookie was not set after GET /" >&2
+  echo "FAIL: pptalk_uid cookie was not set after GET /api/projects" >&2
   cat "$JAR" >&2
   exit 1
 fi
