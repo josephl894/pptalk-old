@@ -122,7 +122,6 @@ def render(
             title=slide.title or "",
             preview=preview,
         )
-    scripts = [scripts_by_idx[s.index] for s in slides]
     _emit("phase_done", phase="narrate", duration=times["narrate"])
 
     console.print(f"[bold cyan]Synthesizing audio[/] (voice={voice}, parallel x{TTS_CONCURRENCY})")

@@ -420,6 +420,7 @@ class Worker:
                     new_scripts = pipeline_runner.generate_scripts(
                         slides_to_gen, pngs_to_gen, summary,
                         on_slide_done=_on_script_done,
+                        log=_log,
                     )
 
                 # Re-read slides (now with scripts persisted).
