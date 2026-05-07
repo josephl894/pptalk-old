@@ -143,3 +143,21 @@ Used `samples/introduction-to-epidemiology.pptx` (61 slides — largest sample).
 **Side-effects in local DB to be aware of:**
 - New non-sample projects: `qa-pr3-30slide` (id `019dffe4-6718-78b2-af6b-d90bcc635641`, 38 slides, 2 renders), `qa-pr3-61slide` (id `019dffea-e211-7c4c-ae2d-6a86b3ba0ab7`, 61 slides, 1 render). Both visible in the user's project list. Not cleaned up — local dev DB, can be soft-deleted via the trash flow if/when convenient.
 - Slide idx 6 of `qa-pr3-61slide` has `script_locked=false` and a freshly regenerated narration (single-slide regen test). Other slides on that project carry the chunked-batch outputs.
+
+## Author response
+
+### eng-1 @ 2026-05-07T01:10:00Z
+
+Two of reviewer's three follow-ups rolled into this PR per team-lead's "non-blocking nits stay in-PR by default" policy. Third (usage_events schema) carved as task #8.
+
+- **Reviewer #1 — wrap change.** `script.py` chunk-intro continuation hint switched from `"""..."""` to `<previous_narration>...</previous_narration>`. Tag bodies don't conflict with literal quote characters in the narration, so a deck whose prior narration happens to contain `"""` no longer ambiguates the delimiter.
+- **Reviewer #3 — worker-level chunk-transition log line.** Added `on_chunk_start(chunk_idx, total, chunk_slides)` callback to `generate_all_scripts_chunked`. Pre-computes the chunk slices so `total` is known up front, then `enumerate(start=1)` over the loop. `pipeline_runner.generate_scripts` gains a `log=None` kwarg; when chunked path runs with 2+ chunks, calls `log("narrate chunk i/N starting (slides X..Y)")` before each chunk's API call. Single-chunk runs stay quiet (no noise on the common path). `worker.py:420-423` now passes its existing `_log` through, so chunk transitions land in `[worker <iso-ts>] ...` format alongside the existing `generating scripts for N slide(s)` line.
+- **Reviewer #2 — `chunk_index` column on `usage_events` / `usage.csv`** is schema work (touches both the CSV header order and the Drizzle `usage_events` migration), so it's been carved as **task #8** rather than rolled in. Existing inline NOTE in `script.py` flagging the gap stays as-is until task #8 lands.
+
+Self-checks performed on the amend (worktree at `/tmp/pptalk-eng1-worker`):
+- `.claude/ci/run.sh`: `→ TS type-check (web)` / `→ Python import smoke (pipeline)` / `imports OK` / `✓ CI green`.
+- `inspect.signature(pipeline_runner.generate_scripts)` shows the new `log=None` kwarg in the keyword-only block.
+- A small invocation of `generate_all_scripts_chunked(slides, pngs, summary, chunk_size=20, on_chunk_start=...)` against the cached 40-slide deck verified the `on_chunk_start` callback fires twice with the expected `(1, 2, slides 1..20)` and `(2, 2, slides 21..40)` signature.
+- I did not run a full chunked end-to-end through the worker post-amend — the original PR-3 smoke and qa's e2e PASS exercised the same code paths, and the amend is structurally additive (new optional kwargs + a different wrap string). Re-running qa's full e2e is reviewer/team-lead's call.
+
+Commit `e76d5c2` (`fix: roll PR-3 review nits into batched narration`) sits on top of the existing branch — no force-push, no amend of prior commits.
