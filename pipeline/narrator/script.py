@@ -156,7 +156,7 @@ def generate_all_scripts(
     if previous_context:
         intro += (
             "You already narrated earlier slides; the previous narration ended:\n"
-            f'"""{previous_context.strip()}"""\n'
+            f"<previous_narration>\n{previous_context.strip()}\n</previous_narration>\n"
             "Continue naturally from there.\n\n"
         )
     intro += (
@@ -227,6 +227,7 @@ def generate_all_scripts_chunked(
     deck_summary: str,
     *,
     chunk_size: int = BATCH_CHUNK_SIZE,
+    on_chunk_start: Callable[[int, int, list[Slide]], None] | None = None,
     on_chunk_done: Callable[[list[Slide], dict[int, str]], None] | None = None,
 ) -> dict[int, str]:
     """Batched narration that splits decks larger than `chunk_size` into chunks.
@@ -236,6 +237,10 @@ def generate_all_scripts_chunked(
     chunks of size <= `chunk_size`, each run as one batched call. The previous
     chunk's last narration is passed forward as a transition hint so continuity
     survives the chunk boundary.
+
+    `on_chunk_start(chunk_idx, total_chunks, chunk_slides)` (optional) fires
+    *before* each chunk's batched call — useful for emitting an ops-visible
+    progress log on long >40-slide jobs. `chunk_idx` is 1-based.
 
     `on_chunk_done(chunk_slides, chunk_scripts)` (optional) fires after each
     chunk completes — useful for streaming progress / persisting partial state.
@@ -247,11 +252,20 @@ def generate_all_scripts_chunked(
     if not slides:
         return {}
 
+    chunks: list[tuple[list[Slide], list[Path]]] = [
+        (slides[i:i + chunk_size], png_paths[i:i + chunk_size])
+        for i in range(0, len(slides), chunk_size)
+    ]
+    total = len(chunks)
+
     out: dict[int, str] = {}
     prev_tail: str | None = None
-    for start in range(0, len(slides), chunk_size):
-        chunk_slides = slides[start:start + chunk_size]
-        chunk_pngs = png_paths[start:start + chunk_size]
+    for i, (chunk_slides, chunk_pngs) in enumerate(chunks, start=1):
+        if on_chunk_start is not None:
+            try:
+                on_chunk_start(i, total, chunk_slides)
+            except Exception:
+                pass
         chunk_scripts = generate_all_scripts(
             chunk_slides, chunk_pngs, deck_summary,
             previous_context=prev_tail,

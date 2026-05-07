@@ -75,6 +75,7 @@ def generate_scripts(
     summary: str | None = None,
     *,
     on_slide_done=None,
+    log=None,
 ) -> dict[int, str]:
     """Batched script generation. Returns {slide.index: script}.
 
@@ -85,12 +86,26 @@ def generate_scripts(
     `on_slide_done(slide, script)` (optional) fires after each chunk returns,
     once per slide in that chunk in slide-index order — useful for streaming
     progress events / partial DB writes.
+
+    `log(msg)` (optional) is a callable used to emit a one-line progress log
+    when each chunk starts (e.g. worker's `_log`); useful for ops visibility
+    on multi-chunk renders. Single-chunk runs emit nothing.
     """
     if summary is None:
         summary = summarize_deck(slides)
 
     if len(slides) != len(pngs):
         raise ValueError(f"slides ({len(slides)}) and pngs ({len(pngs)}) length mismatch")
+
+    def _on_chunk_start(chunk_idx: int, total: int, chunk_slides: list[Slide]) -> None:
+        if log is None or total <= 1:
+            return
+        first = chunk_slides[0].index
+        last = chunk_slides[-1].index
+        try:
+            log(f"narrate chunk {chunk_idx}/{total} starting (slides {first}..{last})")
+        except Exception:
+            pass
 
     def _on_chunk_done(chunk_slides: list[Slide], chunk_scripts: dict[int, str]) -> None:
         if on_slide_done is None:
@@ -102,7 +117,9 @@ def generate_scripts(
                 pass
 
     return generate_all_scripts_chunked(
-        slides, pngs, summary, on_chunk_done=_on_chunk_done,
+        slides, pngs, summary,
+        on_chunk_start=_on_chunk_start,
+        on_chunk_done=_on_chunk_done,
     )
 
 
