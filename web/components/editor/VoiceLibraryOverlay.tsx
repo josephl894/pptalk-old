@@ -94,13 +94,9 @@ export function VoiceLibraryOverlay({
     const a = new Audio(`/voices/${codename}.mp3`);
     audioRef.current = a;
     a.onended = () => setPreviewing((p) => (p === codename ? null : p));
-    a.onerror = () => {
-      setPreviewing((p) => (p === codename ? null : p));
-      toast('Voice sample not available yet', {
-        description: 'Selection still applies on render.',
-      });
-    };
     setPreviewing(codename);
+    // Single toast path: `play()` rejects when the source is missing, before
+    // `onerror` would also fire — handling both produced duplicate toasts.
     a.play().catch(() => {
       setPreviewing((p) => (p === codename ? null : p));
       toast('Voice sample not available yet', {

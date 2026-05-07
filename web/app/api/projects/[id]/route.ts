@@ -178,20 +178,24 @@ export async function PATCH(
     const setClause: Record<string, unknown> = { updatedAt: new Date() };
     if (parsed.data.name !== undefined) setClause.name = parsed.data.name;
 
-    if (parsed.data.voice !== undefined) {
-      // Bulk-write voice to every non-deleted slide so a reload (which derives
-      // the editor's initial voice from `slides.voice`) gets the latest pick.
-      await db
-        .update(slides)
-        .set({ voice: parsed.data.voice, updatedAt: new Date() })
-        .where(and(eq(slides.projectId, id), isNull(slides.deletedAt)));
-    }
-
-    const updated = await db
-      .update(projects)
-      .set(setClause)
-      .where(eq(projects.id, id))
-      .returning();
+    // Wrap the voice + project update in a transaction so we never leave the
+    // DB half-applied (slides updated, project bump dropped, or vice versa).
+    const updated = await db.transaction(async (tx) => {
+      if (parsed.data.voice !== undefined) {
+        // Bulk-write voice to every non-deleted slide so a reload (which
+        // derives the editor's initial voice from `slides.voice`) gets the
+        // latest pick.
+        await tx
+          .update(slides)
+          .set({ voice: parsed.data.voice, updatedAt: new Date() })
+          .where(and(eq(slides.projectId, id), isNull(slides.deletedAt)));
+      }
+      return tx
+        .update(projects)
+        .set(setClause)
+        .where(eq(projects.id, id))
+        .returning();
+    });
 
     return NextResponse.json({ project: serializeProject(updated[0]) });
   } catch (e) {

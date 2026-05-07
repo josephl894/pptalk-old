@@ -52,17 +52,30 @@ export function ScriptPanel({
     }
     const a = new Audio(`/voices/${codename}.mp3`);
     sampleAudioRef.current = a;
-    a.onerror = () => {
-      toast('Voice sample not available yet', {
-        description: 'Open the Voice library to pick a voice.',
-      });
-    };
+    // Single toast path: `play()`'s rejection on a missing source fires
+    // before `onerror` (NotSupportedError when no source loads), so handle
+    // it here. `onerror` would re-toast and produce duplicate notifications.
     a.play().catch(() => {
       toast('Voice sample not available yet', {
         description: 'Open the Voice library to pick a voice.',
       });
     });
   }
+
+  // Pause and release the sample audio on unmount so a play in flight
+  // doesn't outlive the component.
+  React.useEffect(() => {
+    return () => {
+      if (sampleAudioRef.current) {
+        try {
+          sampleAudioRef.current.pause();
+        } catch {
+          /* ignore */
+        }
+        sampleAudioRef.current = null;
+      }
+    };
+  }, []);
 
   // Track the script value at the moment we kicked off regen, so we can
   // detect "regen finished" via the parent's realtime-driven `slide.script`
