@@ -31,3 +31,91 @@ imports OK
 ```
 
 ## Reviews
+
+### reviewer @ 2026-05-06T22:30:00Z
+
+CI run from a per-review worktree following the very convention being introduced: `git worktree add /tmp/pptalk-pr5-review chore/worktree-conventions`, symlinked `pipeline/.env` + `web/.env.local` + dep dirs from the primary tree. `.claude/ci/run.sh` exits 0.
+
+**Helper script smoke — passes the basic shapes**
+- Missing arg → `usage:...` to stderr, **exit 2**. ✓
+- Bad prefix `badname` → clear `error: branch must be prefixed...` to stderr, **exit 2**. ✓
+- Valid `feat/wt-helper-smoke` → worktree created at `/tmp/pptalk-wt-helper-smoke`, branch created. ✓
+- Re-run with same slug → `error: ... already exists. Pick a different slug, or run: ...`, **exit 1**. ✓
+- Env files in the new worktree are **symlinks**, not copies (`lrwxr-xr-x ... pipeline/.env -> /Users/joseph/Desktop/pptalk/pipeline/.env`). ✓
+
+**Briefing internal consistency — mostly aligned, two drifts to flag**
+- Per-agent worktree paths: engineer `/tmp/pptalk-<slug>`, qa `/tmp/pptalk-qa-<pr-id>`, reviewer `/tmp/pptalk-review-<pr-id>` — consistent across CLAUDE.md, engineer.md, qa.md, reviewer.md.
+- The qa `:3001` isolation is properly documented in qa.md (initial worktree section, process-health, dev-server-health, API smoke, UUID guard, UI verification all updated to `:3001` and `/tmp/qa-nextdev-<pr-id>.log`). ✓
+- Cleanup discipline is paired in every role: engineer.md step 9, reviewer.md after step 3, qa.md "Cleanup at the end of the smoke." Consistent. ✓
+- **Drift 1 (non-blocking)**: CLAUDE.md uses `<id>` for reviewer/qa worktrees (lines 28, 30), while reviewer.md and qa.md use `<pr-id>`. Same concept, different placeholder string. A fresh agent reading both will pause to figure out if it's the same thing. Suggest aligning on `<pr-id>` everywhere.
+- **Drift 2 (non-blocking)**: CLAUDE.md "Implement" step (line 26) shows the manual `git worktree add /tmp/pptalk-<slug> -b <feat|fix>/<slug> main` form and never references the new helper. engineer.md step 2 leads with the helper. A fresh engineer reading only CLAUDE.md won't know the helper exists. Either move the helper as the canonical CLAUDE.md form or add a "(or use `.claude/ci/worktree-add.sh`)" pointer.
+
+**Team-lead merge clause — DOES NOT RUN UNDER THE CONVENTION'S OWN STEADY STATE**
+
+This is a real bug that I think should block:
+
+CLAUDE.md line 31:
+```
+git worktree add /tmp/pptalk-merge main && cd /tmp/pptalk-merge && ...
+```
+
+Adjacent CLAUDE.md branch-protection clause:
+```
+The primary tree at `/Users/joseph/Desktop/pptalk` stays on `main` at all times — every other working surface is a `/tmp/pptalk-*` worktree owned by exactly one agent.
+```
+
+These two rules are mutually exclusive. Verified empirically:
+```
+$ git -C /Users/joseph/Desktop/pptalk worktree add /tmp/pptalk-merge-test main
+fatal: 'main' is already used by worktree at '/private/tmp/pptalk-worktree-conventions'
+exit 128
+```
+Git refuses to check the same branch out in two worktrees. As soon as this PR merges and the convention's "primary tree stays on main" rule takes effect, the documented merge command **stops working** — and this is the headline incident the PR cites in its `## Why` ("cause of my mis-commit incident earlier").
+
+The PR's "self-validating" test plan at line 21 doesn't catch this because at authoring time the primary tree was on `fix/voice-card-polish`, so `main` was free to be checked out elsewhere. After this PR merges, the steady state inverts and the command breaks.
+
+**Recommended fix (cleanest):** drop the merge-worktree pattern. Under "primary tree stays on main", merging from the primary tree is race-free *because* no other agent reads from main during the merge — they're all in `/tmp/pptalk-*`. The merge step in CLAUDE.md should just be:
+```
+cd /Users/joseph/Desktop/pptalk    # already on main per the branch-protection rule
+git merge --no-ff --no-edit <branch>
+git branch -d <branch>
+```
+The "never the primary tree" phrase in CLAUDE.md line 31 should be deleted; the primary tree is *exactly* where merges belong under this convention. Then notify the authoring engineer to `git worktree remove /tmp/pptalk-<slug>`.
+
+If a transient merge worktree is genuinely wanted (e.g. to keep `main` in the primary tree pristine during pre-merge sanity), the documented incantation needs to use `--detach` or another pattern that doesn't fight git's "one branch, one worktree" invariant — and that needs to be tested under steady state, not at authoring time.
+
+**Helper script — small foot-gun in the env-symlink line (non-blocking)**
+- `worktree-add.sh:57-58`:
+  ```
+  ln -s "$PRIMARY_TREE/pipeline/.env"  "$WORKTREE/pipeline/.env"  2>/dev/null || true
+  ```
+  The `|| true` swallows ALL failures, including "source file does not exist." If the primary tree is ever missing `pipeline/.env` (fresh checkout, accidental delete, etc.), the helper silently succeeds and CI then fails downstream with the exact `ANTHROPIC_API_KEY is not set` error the helper exists to prevent.
+- Cheaper, more honest: check the source file exists before symlinking; if a target already exists in the worktree (re-run case), skip; if source is missing, fail with a clear message.
+
+**Helper coverage scope — eng-1's call is reasonable, with one suggestion**
+- Engineer-only helper: rationale (qa/reviewer paths need PR-id disambiguation that the slug-based helper doesn't provide) is sound on its face.
+- That said, the qa/reviewer manual form is mostly the same shape as the engineer form plus PR-id; a 4-line addition (`-q <pr-id>` / `-r <pr-id>` flags that pick `pptalk-qa-<id>` / `pptalk-review-<id>` paths) would close the gap and let qa/reviewer benefit from the same env-symlink convenience without touching the manual path. Worth a follow-up; not necessary for this PR.
+
+**Cleanup discipline — verified paired across all roles**
+- engineer.md step 9 → "remove your worktree" after merge confirmation.
+- reviewer.md after step 3 → "Clean up" with the explicit `git worktree remove /tmp/pptalk-review-<pr-id>`.
+- qa.md "Cleanup at the end of the smoke" → kills `:3001` dev process, returns to primary, removes worktree.
+- CLAUDE.md "Merge" step → notifies authoring engineer to remove the per-task worktree.
+✓ pairing complete.
+
+**DOCS-STYLE.md sweep — clean**
+- Headings sentence case, dates `YYYY-MM-DD`, bullets `-`, no emoji in docs (the `✓` in the helper's runtime echo output is shell output, not a doc rule violation), no time estimates. ✓
+
+**Locked-rules sweep — clean**
+- No code paths, no API surface, no schema, no design tokens, no locked copy touch. Pure process/docs change with one auxiliary shell helper. ✓
+
+**Verdict: CHANGES_REQUESTED**
+
+Blocker:
+1. **Merge clause is broken under the convention's steady state.** `git worktree add /tmp/pptalk-merge main` cannot succeed when `main` is checked out in the primary tree, which the same convention requires. Recommend dropping the merge-worktree pattern entirely (the primary tree on `main` is exactly the right place to merge — no race because peers are in `/tmp/pptalk-*`); or replace with a tested-under-steady-state alternative.
+
+Once that's addressed, the rest are non-blocking polish items but worth folding into the same iteration:
+- `<id>` vs `<pr-id>` placeholder drift between CLAUDE.md and the briefings.
+- CLAUDE.md "Implement" step doesn't mention the `worktree-add.sh` helper.
+- Helper's env-symlink lines should fail loudly on missing source rather than `|| true`-swallowing.
+- (Suggestion only, not iterate-required) extend the helper with `-q <pr-id>` / `-r <pr-id>` flags to cover qa/reviewer paths — or document why deliberately not.
