@@ -67,6 +67,46 @@ def _build_anthropic_response(per_slide: dict[int, str]) -> MagicMock:
     return response
 
 
+def _is_narration_call(call) -> bool:
+    """Identify a batched-narration `messages.create` call vs. an O(1) setup call.
+
+    Per SPEC-8 AC1 (amended 2026-05-07), the count constraint applies only to
+    the narration call (call_type=`batched_slide_scripts` in usage telemetry).
+    O(1) setup calls — currently `summarize_deck` — are explicitly permitted
+    and not counted.
+
+    The narration call passes a list-shaped `system` kwarg containing the
+    BATCH_SYSTEM_PROMPT and a per-slide `messages[0].content` list with image
+    blocks. The summary call has no `system` kwarg and a string `content`.
+    Either signal is sufficient; we use the cheaper one (presence of `system`
+    AND a list content with image blocks) to avoid coupling to the exact
+    prompt string.
+    """
+    kwargs = call.kwargs if hasattr(call, "kwargs") else (call[1] if len(call) > 1 else {})
+    system = kwargs.get("system")
+    if not isinstance(system, list):
+        return False
+    messages = kwargs.get("messages") or []
+    if not messages:
+        return False
+    content = messages[0].get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(block, dict) and block.get("type") == "image"
+        for block in content
+    )
+
+
+def _narration_call_count(mock_anthropic) -> int:
+    """Count only the narration `messages.create` calls.
+
+    SPEC-8 AC1 / AC6 (amended 2026-05-07) constrain the narration-call count;
+    O(1) setup calls (e.g. `deck_summary`) are permitted and not counted.
+    """
+    return sum(1 for call in mock_anthropic.call_args_list if _is_narration_call(call))
+
+
 def _trigger_draft_all(base_url: str, project_id, browser_id) -> requests.Response:
     """POST /api/projects/[id]/draft-all as the project's owning user.
 
@@ -195,9 +235,14 @@ def test_ac1_one_llm_call_for_n_unlocked_slides(
 
     drain_worker(max_iterations=10)
 
-    assert mock_anthropic.call_count == 1, (
-        f"expected exactly 1 Claude messages.create call for the batch, "
-        f"got {mock_anthropic.call_count}"
+    # AC1 (amended 2026-05-07): count narration calls only. O(1) setup calls
+    # (e.g. summarize_deck) are explicitly permitted by the post-gate
+    # clarification.
+    narration_calls = _narration_call_count(mock_anthropic)
+    assert narration_calls == 1, (
+        f"expected exactly 1 batched-narration messages.create call, "
+        f"got {narration_calls} narration calls "
+        f"(total messages.create count: {mock_anthropic.call_count})"
     )
 
     after = _read_slide_scripts(project_id)
@@ -292,16 +337,21 @@ def test_ac3_locked_slide_excluded_from_batch_and_unchanged(
 
     drain_worker(max_iterations=10)
 
-    # (a) Exactly one call.
-    assert mock_anthropic.call_count == 1, (
-        f"expected 1 Claude call, got {mock_anthropic.call_count}"
+    # (a) Exactly one narration call (per AC1 amendment 2026-05-07).
+    narration_calls = _narration_call_count(mock_anthropic)
+    assert narration_calls == 1, (
+        f"expected 1 batched-narration call, got {narration_calls} "
+        f"(total messages.create count: {mock_anthropic.call_count})"
     )
 
-    # (b) The request payload to Anthropic does NOT include slide #2's
-    #     content. We probe by stringifying the call args; the prompt
-    #     references slide indices via their `Slide N` headers and locked
-    #     slide #2 should not appear.
-    call_args_blob = repr(mock_anthropic.call_args)
+    # (b) The narration call's payload does NOT include slide #2's content.
+    #     We probe by stringifying the call args of the NARRATION call only
+    #     (the deck_summary call sees slide titles for the whole deck and
+    #     would falsely flag the locked slide as present).
+    narration_call = next(
+        c for c in mock_anthropic.call_args_list if _is_narration_call(c)
+    )
+    call_args_blob = repr(narration_call)
     # Locked slide's body text must not be in the prompt.
     assert LOCKED_BODY not in call_args_blob, (
         "locked slide's existing script leaked into the batch prompt"
@@ -467,9 +517,12 @@ def test_ac5_single_in_scope_slide_makes_one_call(
 
     drain_worker(max_iterations=10)
 
-    assert mock_anthropic.call_count == 1, (
-        f"expected exactly 1 Claude call for N=1 in-scope slide; "
-        f"got {mock_anthropic.call_count}"
+    # AC5 case 2 (amended via AC1 2026-05-07): count narration calls only.
+    narration_calls = _narration_call_count(mock_anthropic)
+    assert narration_calls == 1, (
+        f"expected exactly 1 batched-narration call for N=1 in-scope slide; "
+        f"got {narration_calls} narration calls "
+        f"(total messages.create count: {mock_anthropic.call_count})"
     )
 
     after = _read_slide_scripts(project_id)
@@ -514,18 +567,20 @@ def test_ac6_usage_csv_one_row_per_batch(
     # Filter usage.csv for rows in [t0, t1] tagged with this project (or
     # untagged — usage.csv may not always carry project_id).
     rows_in_window = _usage_rows_after(t0)
-    # Restrict to anthropic / Claude-shaped rows when the row carries
-    # provider info.
-    anthropic_rows = [
+    # AC6 (amended 2026-05-07): count narration-call rows only. O(1) setup
+    # rows (call_type=deck_summary) are explicitly permitted alongside the
+    # narration row; the constraint is that narration-call rows do not
+    # scale with N. We restrict to rows tagged with the batched-narration
+    # call type so a permitted deck_summary row doesn't trip the count.
+    narration_rows = [
         row for row in rows_in_window
-        if (row.get("provider") or "").lower() in ("anthropic", "claude", "")
+        if row.get("call_type") == "batched_slide_scripts"
     ]
 
-    # The single batched call should have produced exactly ONE row.
-    assert len(anthropic_rows) == 1, (
-        f"expected exactly 1 anthropic usage.csv row from the batch run, "
-        f"got {len(anthropic_rows)} rows in window [{t0}, {t1}]: "
-        f"{anthropic_rows}"
+    assert len(narration_rows) == 1, (
+        f"expected exactly 1 batched_slide_scripts usage.csv row from the "
+        f"bulk regen, got {len(narration_rows)} narration rows in window "
+        f"[{t0}, {t1}]: {narration_rows}"
     )
 
 
