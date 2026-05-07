@@ -1,4 +1,4 @@
-# PR-4: Standardize per-agent worktrees to prevent branch-swap races
+# PR-5: Standardize per-agent worktrees to prevent branch-swap races
 Author: eng-3
 Branch: chore/worktree-conventions
 Status: open
@@ -8,12 +8,15 @@ PR-1 and PR-2 qa smokes (2026-05-06) hit two distinct races caused by every agen
 
 ## What changed
 - `CLAUDE.md` — PR-loop section rewritten to require per-task worktrees on implement, per-review worktrees for CI, per-PR qa worktrees + isolated `:3001` dev server, and a transient `/tmp/pptalk-merge` worktree for team-lead's merges. Added an env-file symlink note because `pipeline/.env` and `web/.env.local` are git-ignored and won't be in a fresh worktree (CI's Python import smoke fails without them).
-- `.claude/team/engineer.md` — new hard-rule entry; PR workflow steps 2 (worktree creation + env symlink + per-worktree `npm install` / `uv sync`), 4 (CI from inside worktree), 7 (iterate inside worktree), 9 (cleanup on merge).
+- `.claude/team/engineer.md` — new hard-rule entry; PR workflow steps 2 (worktree creation via helper or manual + env symlink + per-worktree `npm install` / `uv sync`), 4 (CI from inside worktree), 7 (iterate inside worktree), 9 (cleanup on merge).
 - `.claude/team/qa.md` — new "Per-PR worktree" section before the regression procedure; process-health/API-smoke/pipeline-regression/UI-verification steps rewritten to use worktree paths and port `:3001`; new hard-rule.
 - `.claude/team/reviewer.md` — diff/log reads from primary tree are explicitly safe; CI must run from `/tmp/pptalk-review-<id>` worktree; new hard-rule.
+- `.claude/ci/worktree-add.sh` — new helper that wraps `git worktree add` for engineers: validates branch prefix (feat/fix/chore/docs/refactor), creates `/tmp/pptalk-<slug>`, symlinks `pipeline/.env` + `web/.env.local`, prints the next-step reminders. qa and reviewer use the manual `git worktree add` form because their worktree paths (`/tmp/pptalk-qa-<pr-id>`, `/tmp/pptalk-review-<pr-id>`) need PR-id disambiguation that the slug-based helper would not provide.
 
 ## Test plan
 - [x] `.claude/ci/run.sh` exits 0 (run from inside `/tmp/pptalk-worktree-conventions` with env files symlinked).
+- [x] `worktree-add.sh chore/wt-script-smoke` smoke: helper created `/tmp/pptalk-wt-script-smoke`, symlinked both env files, `uv sync` + `python -c "from narrator import script"` returned `imports OK`. Cleanup via `git -C /Users/joseph/Desktop/pptalk worktree remove` was clean.
+- [x] `worktree-add.sh` rejects bad input: missing arg → exit 2 + usage; missing prefix (`badname`) → exit 2 + clear error; pre-existing target → exit 1 + suggested cleanup command.
 - [ ] qa regression — not applicable; docs-only change with no runtime impact.
 - [x] Self-validating: this PR was authored entirely inside `/tmp/pptalk-worktree-conventions` while the primary tree was on `fix/voice-card-polish` and `feat/batched-narration-worker` was active in another worktree, with no observed file-system races.
 

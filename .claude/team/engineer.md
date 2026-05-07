@@ -51,15 +51,19 @@ This first turn is **briefing only**: read the canonical docs in the order below
 Every implementation task moves through the PR loop. Process:
 
 1. **Claim a ticket.** When team-lead assigns work via a Task, claim it with `TaskUpdate({owner: "<your-name>"})` and set status to `in_progress`. If multiple tickets are unassigned, take the lowest task ID first.
-2. **Create your worktree off main.** Never work in the primary tree at `/Users/joseph/Desktop/pptalk` — that's reserved for team-lead on `main`. Pick a slug (short-kebab-case, ≤4 words, e.g. `draft-all-toast`, `uuid-guard-slides`), then from anywhere run:
+2. **Create your worktree off main.** Never work in the primary tree at `/Users/joseph/Desktop/pptalk` — that's reserved for team-lead on `main`. Pick a slug (short-kebab-case, ≤4 words, e.g. `draft-all-toast`, `uuid-guard-slides`), then run the helper:
+   ```
+   /Users/joseph/Desktop/pptalk/.claude/ci/worktree-add.sh feat/<slug>      # or fix/<slug>, chore/<slug>
+   cd /tmp/pptalk-<slug>
+   ```
+   The helper does `git worktree add /tmp/pptalk-<slug> -b feat/<slug> main` and symlinks the git-ignored env files (`pipeline/.env`, `web/.env.local`) from the primary tree so CI's Python import smoke does not fail with `ANTHROPIC_API_KEY is not set`. The equivalent manual path is:
    ```
    git -C /Users/joseph/Desktop/pptalk worktree add /tmp/pptalk-<slug> -b <feat|fix>/<slug> main
    cd /tmp/pptalk-<slug>
-   # symlink the git-ignored env files from the primary tree (worktrees don't carry them):
-   ln -s /Users/joseph/Desktop/pptalk/pipeline/.env pipeline/.env
+   ln -s /Users/joseph/Desktop/pptalk/pipeline/.env  pipeline/.env
    ln -s /Users/joseph/Desktop/pptalk/web/.env.local web/.env.local
    ```
-   Do all subsequent reads, edits, commits, and CI runs from inside that worktree. Each worktree has its own `web/node_modules` and `pipeline/.venv` — run `npm install` (in `/tmp/pptalk-<slug>/web`) and/or `uv sync` (in `/tmp/pptalk-<slug>/pipeline`) if the branch needs them to boot. **Why this matters:** every other agent on the team — peer engineers, reviewer, qa, team-lead — is reading or running code from some working tree at the same time. A `git checkout` in a shared tree silently changes files under their running command. Per-task worktrees are the only thing that prevents that race.
+   Either way: do all subsequent reads, edits, commits, and CI runs from inside that worktree. Each worktree has its own `web/node_modules` and `pipeline/.venv` — run `npm install` (in `/tmp/pptalk-<slug>/web`) and/or `uv sync` (in `/tmp/pptalk-<slug>/pipeline`) if the branch needs them to boot. **Why this matters:** every other agent on the team — peer engineers, reviewer, qa, team-lead — is reading or running code from some working tree at the same time. A `git checkout` in a shared tree silently changes files under their running command. Per-task worktrees are the only thing that prevents that race.
 3. **Implement and commit on your branch.** Use Conventional Commits: `feat: ...`, `fix: ...`, `refactor: ...`, `chore: ...`, `docs: ...`. Commit often — small, reviewable units. Squash happens at merge.
 4. **Run CI locally from inside your worktree.** `cd /tmp/pptalk-<slug> && .claude/ci/run.sh` must exit 0 before opening a PR. If it fails, fix on your branch and re-run. Never run CI from the primary tree.
 5. **Open the PR.** Copy `.claude/prs/TEMPLATE.md` to `.claude/prs/PR-<next-id>.md`. The next id = `max(existing integer ids in .claude/prs/PR-*.md) + 1`; if you collide with another engineer working concurrently, re-increment. Fill in Why / What changed / Test plan / CI run (paste the last 5 lines of CI output). Set Status to `open`. Commit the PR file on your branch.
