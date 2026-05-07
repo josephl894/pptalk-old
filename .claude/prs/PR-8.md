@@ -227,5 +227,25 @@ All 9 tests across AC1..AC7 pass. The impl on `feat/bulk-regen-batch` (HEAD `34e
 
 **Verdict: APPROVED**
 
+## Author response
+
+### eng-1 @ 2026-05-07 (post-merge nits)
+
+Three reviewer follow-ups addressed inline on `main`. None change observable behavior on the spec test surface; one is a small bug fix, two are documentation.
+
+**(a) CHANGELOG wording on chunked-deck shape — confirmed accurate.** Skimmed `CHANGELOG.md` 2026-05-07 PR-8 entry. Lines 6 and 10 already make the chunking shape explicit ("the full-render path was already batched … the Draft-all bulk action still enqueued N jobs … reviewer approved with three non-blocking follow-ups: chunked-deck (>40 slides) ships N_chunks narration calls under the hood"). No tweak needed; the wording matches what the impl does and what was approved.
+
+**(b) `_get_slides` deleted-at filter — was a real gap; fixed.** The shared `_get_slides` helper at `pipeline/narrator/worker.py:96-109` does NOT filter `deleted_at IS NULL` (it's used by `full_render` too, so I did not change its global semantics). PR-8.md `## Invariant defense` line 41 was therefore optimistic when it said "soft-deleted slides are excluded by … `_get_slides` selection." Real check: a slide soft-deleted between route enqueue and worker run could have been batched (and its narration written back, even though the route filtered it out at enqueue). Fixed in the worker handler by querying `slides.id WHERE project_id = %s AND deleted_at IS NULL` once, then intersecting `requested ∩ live_ids` before applying the `script_locked` filter. The locked + deleted filters now both run at handler-time, so AC3's invariant ("locked slides excluded and unmodified") + the schema convention (soft-deleted rows are tombstones) are both honored even under TOCTOU.
+
+**(c) Large-deck transaction-size pressure.** Order of magnitude: each `set_slide_script` is one row-level UPDATE writing a small text column (typical narration is 60-120 words, ≤ ~1KB). For a 200-slide deck the transaction holds 200 row-locks for the duration of the apply step (after the batched call has returned, so no LLM latency in the lock window) — Postgres handles this comfortably; lock pressure is negligible vs. the surrounding work. The bigger consideration is WAL volume (200 row updates → 200 WAL records) and Realtime fan-out (200 `postgres_changes` events to subscribers in the overview overlay). Both are well within Supabase local + cloud limits at this scale; the demo spec caps decks at ~100 slides anyway. No benchmark run yet — committing this as a documented expectation, not a measurement. If a pathological deck (e.g. 500+ slides) ever lands, the next escalation is splitting the apply step into a per-slide commit (forfeiting the all-or-nothing AC4 guarantee for chunked decks but making each apply self-contained); that is a future-spec decision, not this PR's.
+
+## Invariant defense — addendum
+
+- **Schema convention — soft-delete (`deleted_at IS NOT NULL` rows are tombstones).** Worker handler `_do_project_script_regen` now explicitly queries `SELECT id FROM slides WHERE project_id = %s AND deleted_at IS NULL` and intersects the requested `slide_ids` with that live set before the `script_locked` filter. A slide soft-deleted between route enqueue and worker run is dropped from both the model input and the DB write set. The shared `_get_slides` helper (used by `full_render` and other handlers) does NOT filter `deleted_at`; that broader change is out of scope for this PR — the targeted handler-level filter fully covers the bulk-regen path.
+
+## Decisions and risks — addendum
+
+- **Large-deck apply-transaction shape.** The apply step opens one DB transaction holding N row-level UPDATEs (one per in-scope slide). For typical decks (≤100 slides per the demo scope) lock duration is dominated by network + commit, not by the UPDATEs themselves; WAL volume and Realtime fan-out scale linearly with N and are well within Supabase limits. No benchmark on >100-slide decks — TODO if a >200-slide deck ever lands. Failure mode if it does: long-running transaction holding many row-locks under contention from concurrent writes (e.g. user editing a slide's script in the editor mid-batch). Mitigation if needed: split apply into per-slide commits (forfeits the all-or-nothing AC4 guarantee on chunked decks → would need a spec decision).
+
 ## Telemetry
 <!-- filled by team-lead post-merge -->

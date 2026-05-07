@@ -604,6 +604,16 @@ class Worker:
             if project is None:
                 raise RuntimeError(f"project {project_id} not found")
             deck_slides = _get_slides(conn, project_id)
+            # _get_slides does not filter `deleted_at IS NULL` (it's shared with
+            # full_render). Pull the live set of non-deleted slide ids for this
+            # project so we can drop any soft-deleted slides from the in-scope
+            # set defensively (TOCTOU between enqueue and run).
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM slides WHERE project_id = %s AND deleted_at IS NULL",
+                    (project_id,),
+                )
+                live_ids = {str(r["id"]) for r in cur.fetchall()}
 
         # Build full deck SlideDC list once for the deck summary (used to give
         # the model context across the project, even when only some slides are
@@ -614,14 +624,14 @@ class Worker:
         deck_by_id = {str(s["id"]): s for s in deck_slides}
 
         # Resolve and filter the requested set: keep only slides that exist in
-        # this project, are not locked, and not deleted (the deck_slides query
-        # already filters out other projects implicitly; soft-delete column
-        # is not in the SELECT but defaults to NULL on undeleted rows — keep
-        # the existing _get_slides surface and re-check via DB on write).
+        # this project, are not soft-deleted, and are not locked. AC3 requires
+        # locked slides to never appear in the batched prompt; the schema's
+        # soft-delete convention requires `deleted_at IS NOT NULL` rows to be
+        # invisible to writers.
         requested = [str(sid) for sid in raw_ids if str(sid) in deck_by_id]
         in_scope_rows = [
             deck_by_id[sid] for sid in requested
-            if not deck_by_id[sid].get("script_locked")
+            if sid in live_ids and not deck_by_id[sid].get("script_locked")
         ]
 
         if not in_scope_rows:
