@@ -34,6 +34,9 @@ web/tsconfig.tsbuildinfo
 .vscode/
 .idea/
 
+# Claude Code local state
+.claude/scheduled_tasks.lock
+
 # Supabase local
 web/supabase/.branches/
 web/supabase/.temp/

@@ -36,15 +36,22 @@ BRANCH="$1"
 BASE="${2:-main}"
 
 case "$BRANCH" in
-  feat/*|fix/*|chore/*|docs/*|refactor/*) ;;
+  feat/*|fix/*|chore/*|docs/*|refactor/*|test/*) ;;
   *)
-    echo "error: branch must be prefixed with feat/ fix/ chore/ docs/ refactor/ (got '$BRANCH')" >&2
+    echo "error: branch must be prefixed with feat/ fix/ chore/ docs/ refactor/ test/ (got '$BRANCH')" >&2
     exit 2
     ;;
 esac
 
+PREFIX="${BRANCH%%/*}"
 SLUG="${BRANCH#*/}"
-WORKTREE="/tmp/pptalk-${SLUG}"
+# qa's test/ branches pair with engineer's feat/ branches on the same slug —
+# differentiate the worktree path to avoid collision when both run in parallel.
+if [ "$PREFIX" = "test" ]; then
+  WORKTREE="/tmp/pptalk-test-${SLUG}"
+else
+  WORKTREE="/tmp/pptalk-${SLUG}"
+fi
 
 if [ -e "$WORKTREE" ]; then
   echo "error: $WORKTREE already exists. Pick a different slug, or run: git -C $PRIMARY_TREE worktree remove $WORKTREE" >&2
